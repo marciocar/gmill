@@ -56,12 +56,12 @@ nodes:
     layer: domain
     node_type: state
     plane: PROD
-    status: open
+    status: confirmed
     impact: 5
-    confidence: 0.9
+    confidence: 1.0
     verified_at: 2026-09-16
-    verified_against: nao-verificado-gate-declarado-e-nao-provado
-    label: "O gate está INSTALADO mas NÃO foi provado por execução nesta adoção (alvo sem commits, ou lint indisponível no momento). Instalar não é sinônimo de proteger: rode 'bash ops/verify-adopter-gate.sh <este-repo>' a partir do core, ou faça um commit que viole o lint de propósito e confirme que ele é BARRADO. Enquanto isto for `open`, a proteção deste repo é declarada, não verificada."
+    verified_against: gate-executado-no-repo-vivo-violacao-hard-plantada-bloqueio-exercido-rc1
+    label: "O gate está INSTALADO e o BLOQUEIO foi EXERCIDO. A prova do instalador saiu ADIADA (alvo sem commits) e depois INCONCLUSIVA (hook executando, lint limpo, nada a barrar). Plantou-se então uma violação HARD descartável (drift em docs/onion/inventory.md, REGRA 8) e o commit foi REPROVADO — rc=1, git log inalterado. Árvore restaurada: 0 HARD e 22 SOFT, dos quais 14 são a REGRA 15 cobrando carimbo de frescor no docs/business-context/ pré-existente (passivo herdado do conteúdo, não da instalação)."
 
   - id: Q_WHAT_IS_THIS_REPO_DOMAIN
     node_type: question
