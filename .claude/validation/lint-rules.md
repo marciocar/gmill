@@ -27,7 +27,7 @@ São as regras que o gate mecânico do Onion aplica a **todo repo da rede**: o m
 lint roda no core e em cada adotante. **HARD** bloqueia o merge; **SOFT** avisa, mas não
 bloqueia o CI.
 
-**81 regras** no total — **72 HARD**, **22 SOFT**.
+**87 regras** no total — **77 HARD**, **24 SOFT**.
 
 ## Frontmatter & conformidade de artefato
 
@@ -108,6 +108,9 @@ Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, ma
 | 76 | marketplace.json da raiz é projeção do gerador | HARD | .claude-plugin/marketplace.json envelhecendo calado (o core também é marketplace instalável) |
 | 80 | Números do harness saem de SSOT gerada, nunca de comentário | HARD | contagem sobre o próprio harness escrita à mão, que envelhece calada e é citada como medição |
 | 81 | Painel de estado é GERADO dos produtores, nunca redigido | HARD | painel de testes com número sem produtor — metas redesenhadas como medição, que foi o defeito real deste repo |
+| 83 | Id de modelo VERSIONADO só na SSOT declarada | HARD | versão literal de modelo espalhada por config, que caduca sem aviso |
+| 84 | Índice de leitura do KG em sincronia com os traces | HARD | o hook da perna de leitura mentir POR OMISSÃO |
+| 85 | Porta pública espelha o core, com catraca | HARD | a porta MENTIR sobre o que o core é, por falta de re-materialização |
 
 ## KG & proveniência
 
@@ -132,6 +135,7 @@ Conhecimento nasce no grafo e não morre em prosa; proveniência com catraca (po
 | 69 | Roster de fontes com revisita vencida (docs/onion/radar-sources.yaml) | SOFT | fonte de rotina (semanal/mensal/trimestral/anual) esquecida — o roster nasceu na F2 como DADO da |
 | 78 | `.kg.yaml` versionado é YAML VÁLIDO, com catraca | HARD + SOFT | grafo que o kg-radar aceita (parser awk sobre TEXTO) e que qualquer consumidor com lib YAML rejeita |
 | 82 | Os dois leitores do corpus CONCORDAM sobre quem é nó | HARD + SOFT | grafo válido em que o radar (awk sobre texto) e o PyYAML veem populações DIFERENTES |
+| 87 | PR que EDITA um `.kg.yaml` enxergou os `confirmed` dele | SOFT | propor contra o próprio corpus — o defeito medido em 2026-09-19 |
 
 ## Automação Graduada
 
@@ -181,8 +185,10 @@ O trabalho PROPOSTO carrega rastro material de ter sido revisado — o gate cria
 
 ## Integridade do próprio gate
 
-As demais categorias perguntam 'achei violação?'. Esta pergunta 'eu cheguei a olhar?' — porque varredura cega devolve zero violações, que é indistinguível de conformidade. Categoria nova em 2026-08-04, quando o lint rodou de dentro de um worktree de harness e varreu 0 dos 51 agentes sem emitir uma linha de aviso.
+As demais categorias perguntam 'achei violação?'. Esta pergunta 'eu cheguei a olhar?' — porque varredura cega devolve zero violações, que é indistinguível de conformidade. Categoria nova em 2026-08-04, quando o lint rodou de dentro de um worktree de harness e varreu 0 dos 51 agentes sem emitir uma linha de aviso. A REGRA 86 entrou aqui em 2026-09-17 pelo mesmo motivo, um andar acima: um workflow que não PARSEIA não é um gate que falhou, é um gate que nunca rodou — e o repo o contava como existente. A REGRA 88 entrou em 2026-09-20 pela versão mais perversa da classe: o gate rodava, mas sem árvore — `bash <script do repo>` saía 127, o job reprovava TODO PR e a mensagem culpava o código revisado. Gate que nunca olhou, acusando.
 
 | Nº | Regra | Severidade | O que previne |
 |---:|-------|:----------:|---------------|
 | 54 | A varredura ENXERGA o que existe (guarda-das-guardas) | HARD | gate que varre ZERO arquivo e mesmo assim reporta OK — verde sem ter olhado |
+| 86 | Workflow de CI PARSEIA como YAML | HARD | workflow inexecutável passando por existente, e guarda morta por sintaxe |
+| 88 | Job de workflow que EXECUTA arquivo do repo faz checkout | HARD + SOFT | job sem `actions/checkout` invocando script versionado; o bash sai 127 e o `rc != 0` |
