@@ -20,3 +20,4 @@ docs/knowledge-base/concepts/identificar-precificar-dor-cliente.md|Startup
 docs/knowledge-base/concepts/meeting-transcription-to-knowledge-base.md|Firebase
 docs/knowledge-base/education/README.md|Winne&Hadwin
 docs/knowledge-base/platforms/runflow.md|Tool
+.claude/validation/vendor-scrub-form-check.sh|Banví
