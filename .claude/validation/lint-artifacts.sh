@@ -93,6 +93,19 @@ CLAUDE_DIR="${REPO_ROOT}/.claude"
 # `grep` dentro do predicado por-arquivo, tira ~1.461 execuções de grep por varredura.
 _stamp_has() { grep -qE "$1" "${REPO_ROOT}/.claude/.onion-version" 2>/dev/null; }
 _ROLE_TAIL='[[:space:]]*(#.*)?$'
+# ⚠️ `standalone` NAO ENTRA AQUI, E A TENTATIVA FOI MEDIDA E REVERTIDA NO MESMO PR (2026-09-18).
+# `IS_DERIVED` nao e "que papel e este" — e um PORTEIRO: dezenove sitios o consomem, dezessete deles
+# como `[ "${IS_DERIVED}" -eq 1 ] && return 0`. Acrescentar um papel aqui DESLIGA dezessete guardas
+# de uma vez. Medido: a mesma arvore, trocando SO o carimbo `standalone`→`source`, vai de 0 HARD
+# para 3 HARD — o verde era comprado por isencao, nao conquistado.
+# E o dano concreto que isso abriria, provado pela passada adversarial: com `standalone` derivado, a
+# REGRA 80 e a REGRA 81 calam, e uma porta PUBLICA carregando o painel com a biografia do core
+# (294 residuos, 1.586 achados que nao sao dela) passaria em 0 HARD. Seria curar a instancia do
+# defeito e apagar o DETECTOR DA CLASSE no mesmo commit.
+# ONDE `standalone` ENTRA, e por que la e diferente: nos predicados que perguntam "a evidencia
+# core-privada esta legitimamente ausente neste papel?" (escada, residuo de revisao, carteiro). La a
+# ausencia e de OBJETO e a isencao e correta. Aqui a pergunta e outra — "devo julgar este repo?" —
+# e a porta DEVE ser julgada: ela distribui a maquinaria completa.
 IS_DERIVED=0; _stamp_has "^([[:space:]]*role:[[:space:]]*(adopted|hub)${_ROLE_TAIL}|[[:space:]]*decoupled_from:)" && IS_DERIVED=1
 IS_LEAF=0;    _stamp_has "^[[:space:]]*role:[[:space:]]*adopted${_ROLE_TAIL}" && IS_LEAF=1
 
@@ -305,10 +318,57 @@ _rule_label() {   # $1 = mensagem · $2 = função chamadora → mensagem com "R
   esac
 }
 
+# ══ RECORTE POR PAPEL — "não pude julgar" não é a mesma coisa em todo repo ════════════════════
+# Medido 2026-09-17, na 1ª sessão REAL dentro da porta pública: o lint dela acusava HARD em guardas
+# que declaravam honestamente NÃO TER JULGADO — sem `.kg.yaml`, sem `members.yaml`, sem PR. As
+# guardas estavam certas em não passar em silêncio; erradas em tratar AUSÊNCIA LEGÍTIMA como
+# defeito. Uma porta que não recebe o corpus do core não pode ser cobrada pela validade dele.
+#
+# ⚠️ E NÃO VIRA SILÊNCIO — seria trocar um fail-closed por um fail-open. Vira SOFT com classe
+# PRÓPRIA (`[papel/SEM-OBJETO]`), que aparece no sumário, é contável, e diz o papel e a classe. A
+# distinção que importa: no repo-FONTE a mesma ausência continua HARD, porque ali ela É defeito.
+_ROLE_OF_THIS_REPO=""
+_role() {
+  [ -n "${_ROLE_OF_THIS_REPO}" ] && { printf '%s' "${_ROLE_OF_THIS_REPO}"; return; }
+  # ⚠️ LÊ O STAMP DIRETO, não invoca o `onion-version.sh`. Duas razões, e a segunda é a que me
+  # custou uma depuração: (1) `violation()` roda centenas de vezes e cada chamada abriria um bash;
+  # (2) o predicado é consultado de DENTRO de `$( )`, e ali o cache nunca persiste — o custo vira
+  # o caminho quente. O stamp é a mesma fonte que o `onion-version.sh` lê; ler o dado é mais
+  # barato e mais previsível que perguntar ao script que o lê.
+  local stamp="${REPO_ROOT}/.claude/.onion-version"
+  if [ -f "${stamp}" ]; then
+    _ROLE_OF_THIS_REPO="$(awk '/^role:/{print $2; exit}' "${stamp}" 2>/dev/null)"
+  fi
+  [ -n "${_ROLE_OF_THIS_REPO}" ] || _ROLE_OF_THIS_REPO="source"
+  printf '%s' "${_ROLE_OF_THIS_REPO}"
+}
+# A ausência só é LEGÍTIMA se o objeto de fato não existe E o papel não é a fonte. Existir-e-estar-
+# quebrado continua HARD em qualquer papel: o recorte é sobre NÃO RECEBER, nunca sobre "está ruim".
+_without_object_for_role() {
+  local msg="$1"
+  [ "$(_role)" = "source" ] && return 1
+  case "${msg}" in
+    *kg-selo/ISENCAO*|*kg-parity/NAO-MEDIDO*|*kg-yaml/NAO-VERIFICADO*|*kg-verificacao/*)
+      [ -z "$(git -C "${REPO_ROOT}" ls-files '*.kg.yaml' 2>/dev/null | head -1)" ] && return 0 ;;
+    *review-artifact/ISENCAO*)
+      return 0 ;;   # PR é do fluxo do core; porta/adotante não tem o mesmo objeto
+    *REGRA\ 85*|*door-staleness*)
+      [ ! -f "${REPO_ROOT}/docs/evolution/federation/members.yaml" ] && return 0 ;;
+    *frescor-doutrinário/CATRACA-INDISPONIVEL*)
+      return 0 ;;   # a catraca do core nasce do corpus DELE; o alvo emite a própria
+  esac
+  return 1
+}
+
 violation() {
   local severity="$1"   # HARD | SOFT
   local file="$2"
   local rule="$3"
+
+  if [ "${severity}" = "HARD" ] && _without_object_for_role "${rule}"; then
+    severity="SOFT"
+    rule="[papel/SEM-OBJETO] papel '$(_role)' não recebe o objeto desta guarda — ${rule}"
+  fi
 
   # Caminho relativo à raiz do repo para mensagens mais legíveis
   local rel_file="${file#${REPO_ROOT}/}"
@@ -955,6 +1015,57 @@ check_branch_agent_distinction() {
 # lint-selftest é uma CÓPIA sem `.git` — ali `git ls-files` falha e TODO glob pareceria
 # morto, reprovando até a fixture `good`. Falso-positivo medido no dogfood, 2026-08-03:
 # a guarda acusaria a si mesma no próprio auto-teste. Fora de repo git, cai para `find`.
+_glob_literal_prefix() { # $1=glob → maior prefixo SEM curinga ('' se o glob já começa com um)
+  local g="$1" acc="" seg
+  # `set -f` NÃO é zelo: a expansão sem aspas abaixo sofre PATHNAME EXPANSION, e o argumento é
+  # literalmente um glob — sem isto, `docs/evolution/research/**` viraria a lista de arquivos do cwd.
+  local _noglob=1; case "$-" in *f*) _noglob=0 ;; esac
+  set -f
+  local IFS=/
+  for seg in ${g}; do
+    case "${seg}" in *'*'*|*'?'*|*'['*) break ;; esac
+    [ -n "${seg}" ] || continue
+    acc="${acc:+${acc}/}${seg}"
+  done
+  [ "${_noglob}" -eq 1 ] && set +f
+  printf '%s' "${acc}"
+}
+
+# As raízes que o TRANSPORTE declara viajar — SSOT única (`vendor-manifest.sh --emit-scrub-roots`),
+# nunca uma lista repetida aqui. FAIL-CLOSED: manifesto ausente/vazio devolve vazio, e quem consulta
+# trata isso como "não sei" — ou seja, NÃO concede isenção nenhuma.
+_traveling_surface() {
+  [ -n "${_SURF_TRAVELS_CACHE:-}" ] && { printf '%s' "${_SURF_TRAVELS_CACHE}"; return 0; }
+  local mf="${CLAUDE_DIR}/utils/adopt/vendor-manifest.sh"
+  if [ -f "${mf}" ]; then
+    _SURF_TRAVELS_CACHE="$(bash "${mf}" --emit-scrub-roots 2>/dev/null)" || _SURF_TRAVELS_CACHE=""
+  else
+    _SURF_TRAVELS_CACHE=""
+  fi
+  printf '%s' "${_SURF_TRAVELS_CACHE}"
+}
+
+# Verdadeiro quando NENHUM glob desta regra aponta para superfície que viaja — isto é, o objeto da
+# regra é core-only e, num alvo, ela é estruturalmente incapaz de casar. No papel `source` a árvore é
+# completa: ali a mesma ausência continua HARD (é regra morta de verdade, não falta de objeto).
+_rule_without_object_for_role() { # $1=globs (um por linha)
+  [ "$(_role)" = "source" ] && return 1
+  local surf g prefix r inside=0
+  surf="$(_traveling_surface)"
+  [ -n "${surf}" ] || return 1          # fail-closed: sem SSOT do transporte, não se concede isenção
+  while IFS= read -r g; do
+    [ -n "${g}" ] || continue
+    prefix="$(_glob_literal_prefix "${g}")"
+    [ -n "${prefix}" ] || return 1      # glob que começa em curinga varre o repo todo: tem objeto aqui
+    while IFS= read -r r; do
+      [ -n "${r}" ] || continue
+      case "${prefix}/" in "${r}/"*) inside=1; break ;; esac
+    done <<< "${surf}"
+    [ "${inside}" -eq 1 ] && return 1   # ao menos um glob mira superfície que viaja → cobrança válida
+  done <<< "$1"
+  return 0
+}
+
 _rule_glob_matches() { # $1=glob
   local g="$1" pat _ls
   if git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
@@ -975,9 +1086,25 @@ _rule_glob_matches() { # $1=glob
     [ -n "${_ls}" ] && return 0
     return 1
   fi
-  pat="${g##*/}"                                   # '**/*.kg.yaml' → '*.kg.yaml'
-  [ -n "${pat}" ] || return 1
-  find "${REPO_ROOT}" -name "${pat}" -not -path '*/.git/*' -print -quit | grep -q .
+  # ⚠️ RAMO NÃO-GIT — e ele MENTIU (2026-09-17, medido). A forma anterior era
+  # `find "${REPO_ROOT}" -name "${g##*/}"`, e `${g##*/}` de `docs/evolution/research/**` é `**`:
+  # um `-name '**'` casa QUALQUER arquivo do repo. Resultado: num destino sem `git init` toda regra
+  # path-scoped passava trivialmente. Foi exatamente assim que um dogfood da porta declarou
+  # "0 HARD" enquanto a porta real (repo git) reprovava — a guarda dava vereditos OPOSTOS nos dois
+  # substratos, e o barato era o que eu media. Classe [[testar-no-caminho-errado-e-nao-testar]].
+  # Agora o ramo não-git respeita o PREFIXO literal do glob, como o pathspec do git faz.
+  local prefix root _hit
+  prefix="$(_glob_literal_prefix "${g}")"
+  root="${REPO_ROOT}${prefix:+/${prefix}}"
+  [ -e "${root}" ] || return 1
+  pat="${g##*/}"
+  case "${pat}" in
+    ''|'*'|'**')                                   # sufixo puro-curinga: basta haver arquivo sob o prefixo
+      _hit="$(find "${root}" -type f -not -path '*/.git/*' -print -quit 2>/dev/null)" ;;
+    *)                                             # '**/*.kg.yaml' → '*.kg.yaml', procurado SOB o prefixo
+      _hit="$(find "${root}" -name "${pat}" -not -path '*/.git/*' -print -quit 2>/dev/null)" ;;
+  esac
+  [ -n "${_hit}" ]                                 # sem pipe: `find | grep -q` é a corrida EPIPE de sempre
 }
 
 check_rules_pathscoped() {
@@ -1006,7 +1133,15 @@ check_rules_pathscoped() {
       if _rule_glob_matches "${g}"; then matched=1; break; fi
     done <<< "${globs}"
     if [ "${matched}" -eq 0 ]; then
-      violation "HARD" "${rule}" "nenhum glob de 'paths:' casa arquivo rastreado ($(printf '%s' "${globs}" | tr '\n' ' ')) — a regra existe no disco e NUNCA carrega — corrija o glob para casar um arquivo real rastreado (git ls-files), ou remova a regra se obsoleta"
+      # A allowlist do transporte separa a regra do objeto dela: `.claude/**` viaja inteiro, mas
+      # `docs/evolution/` não (é infra LOCAL do alvo, por desenho do vendor-manifest). As duas
+      # decisões estão certas isoladas; juntas produzem uma regra que SÓ PODE reprovar no alvo.
+      # A guarda declara a isenção — nunca passa calada — e mantém a cobrança viva no `source`.
+      if _rule_without_object_for_role "${globs}"; then
+        violation "SOFT" "${rule}" "[papel/SEM-OBJETO] papel '$(_role)' não recebe o objeto desta regra: nenhum glob de 'paths:' ($(printf '%s' "${globs}" | tr '\n' ' ')) aponta para superfície que VIAJA (vendor-manifest.sh --emit-scrub-roots) — a regra chegou com o framework, o objeto dela é core-only; ela dorme aqui, e a cobrança segue HARD na fonte"
+      else
+        violation "HARD" "${rule}" "nenhum glob de 'paths:' casa arquivo rastreado ($(printf '%s' "${globs}" | tr '\n' ' ')) — a regra existe no disco e NUNCA carrega — corrija o glob para casar um arquivo real rastreado (git ls-files), ou remova a regra se obsoleta"
+      fi
     fi
   done < <(_find "${rules_dir}" -name "*.md" ! -iname 'readme.md' -print0 2>/dev/null)
 }
@@ -1999,6 +2134,338 @@ check_context_freshness_stamp() {
   done
 }
 
+
+# ===========================================================================
+# REGRA 83 — Id de modelo VERSIONADO só na SSOT declarada [HARD]
+# previne: versão literal de modelo espalhada por config, que caduca sem aviso
+#   CONTRA-FLUXO DO PORTE (2026-09-16). Esta REGRA não nasceu aqui: nasceu no porte
+#   Codex, e o core não a tinha. Lá, `model = "gpt-5.4"` estava fixado em `config.toml`
+#   e em 47 agentes; quando a OpenAI mudou o lineup, o `@onion` PAROU DE INICIAR — o
+#   modelo do perfil não existia mais para a conta. A REGRA 3 (Campo model: restrito à
+#   allowlist sonnet|opus|haiku|fable) cobre o frontmatter de comando/agente e resolveria
+#   o caso se ele fosse `model:` em markdown; ela NÃO enxerga `model =` em TOML, nem
+#   `"model":` num payload JSON, nem uma variável de workflow. O buraco só apareceu porque
+#   existe um substrato diferente para pisar nele — é literalmente o que uma prova de
+#   portabilidade serve para fazer.
+#
+#   O QUE ELA COBRA: id de modelo com VERSÃO (claude-sonnet-5, gpt-5.4, gemini-3-1…) em
+#   arquivo de CONFIGURAÇÃO/EXECUÇÃO da superfície que viaja, fora das SSOTs declaradas.
+#   O que NÃO cobra, e a fronteira é deliberada:
+#     · PROSA/KB que documenta o panorama de modelos (agent-orchestration.md cita 24 —
+#       é documentação de catálogo de terceiro, não configuração nossa; frescor dali é
+#       assunto da REGRA 42 (Gate de FRESCOR DOUTRINÁRIO, com catraca));
+#     · COMENTÁRIO (`#`) — registro histórico de medição não é pin;
+#     · FIXTURE de bancada — dado de teste precisa do literal para testar o literal.
+#   Sem esses três recortes a guarda acusaria 5 sítios legítimos e 1 real, e guarda que
+#   grita no inócuo ensina a ser ignorada.
+#
+#   SSOTs DECLARADAS (o literal PODE viver aqui, e só aqui):
+#     · .claude/settings.json → fallbackModel  (projeção da escada; REGRA 70)
+#     · env REVIEW_MODEL nos workflows de review (uma chave, lida pelas chamadas)
+# ===========================================================================
+check_model_version_fora_da_ssot() {
+  local f hit n
+  while IFS= read -r f; do
+    case "${f}" in
+      */fixtures/*|*lint-selftest.sh|*review-verdict.sh) continue ;;
+      */settings.json) continue ;;   # SSOT declarada (fallbackModel, REGRA 70)
+    esac
+    # ⚠️ A VARIÁVEL DO `read` TEM DE SER A MESMA DO CORPO. Medido 2026-09-16: o rename que curou
+    # a REGRA 60 (Identificador de código em INGLÊS) trocou o corpo e ESQUECEU o `read`, e sob
+    # `set -u` o lint MORREU nesta linha — em silêncio para quem só olhava o sumário, porque a
+    # morte aconteceu no meio e as guardas seguintes nem rodaram. A bancada pegou; o olho, não.
+    while IFS= read -r hit; do
+      n="${hit%%:*}"; hit="${hit#*:}"
+      # ⚠️ SEM PIPE NOS FILTROS, e a razão é medida: `printf "$x" | grep -q P && continue` sob
+      # `pipefail` é a classe `pipefail-epipe-early-closer` — o `grep -q` fecha cedo, o `printf`
+      # leva EPIPE, o status do pipeline vira 141 e o `&& continue` NÃO DISPARA. O filtro existe,
+      # parece correto, e não filtra nada: os dois casos de falso-positivo da bancada reprovaram
+      # exatamente assim. Casamento de padrão do próprio bash não abre processo nem pipe.
+      # comentário (shell/yaml/toml) não é configuração — é registro histórico de medição
+      case "${hit}" in [[:space:]]*\#*|\#*) continue ;; esac
+      # a própria declaração da SSOT é o lugar onde o literal DEVE morar
+      case "${hit}" in *REVIEW_MODEL*:*) continue ;; esac
+      violation "HARD" "${f#"${REPO_ROOT}/"}:${n}" "REGRA 83 (Id de modelo VERSIONADO só na SSOT declarada): versão literal de modelo em configuração, fora da SSOT — ela caduca sem aviso e o agente PARA DE INICIAR quando o lineup muda (medido no porte Codex, 2026-09-16). Aponte para a SSOT (env REVIEW_MODEL / fallbackModel) em vez de repetir o literal."
+      # ⚠️ O PADRÃO FOI CALIBRADO CONTRA AS FORMAS REAIS, e a 1ª redação não casava NENHUMA.
+      # Ela exigia dois grupos numéricos (`-[a-z0-9]+-?[0-9]+`) e morria em `gpt-5.4`, porque ali
+      # o segundo grupo é `.4`, não `-4`. A bancada pegou — com a guarda escrita, plugada e
+      # "verde", que é o pior estado possível: cobertura declarada e nula. Formas que ela PRECISA
+      # casar, todas medidas neste repo: gpt-5.4 · claude-sonnet-5 · claude-opus-5 ·
+      # claude-fable-5-1 · claude-haiku-4-5-20251001 · "model":"..." em payload JSON.
+    done < <(grep -nE '(model|MODEL)[^A-Za-z0-9]{0,6}[:=][^A-Za-z]{0,6}"?(claude|gpt|gemini|llama)-[a-z0-9.-]*[0-9]' "${f}" || true)
+  # ⚠️ `_find`, NUNCA `find` cru — e isto custou uma reprovação da bancada. O helper poda
+  # `.claude/worktrees/` (worktrees git locais, gitignored) e respeita `--only`; um `find` cru
+  # varre os worktrees e acusa o LINT DE OUTRA BRANCH como se fosse artefato deste repo. O
+  # próprio `_find` documenta essa poda em dez linhas, e eu a reintroduzi ao duplicar a varredura
+  # em vez de reusar o helper. Guarda nova que abre sua própria varredura herda zero calibração.
+  done < <(_find "${REPO_ROOT}/.claude" "${REPO_ROOT}/.github/workflows" -type f \
+             \( -name '*.toml' -o -name '*.json' -o -name '*.yml' -o -name '*.yaml' -o -name '*.sh' \) -print 2>/dev/null || true)
+}
+
+
+# ===========================================================================
+# REGRA 87 — PR que EDITA um `.kg.yaml` enxergou os `confirmed` dele [SOFT]
+# previne: propor contra o próprio corpus — o defeito medido em 2026-09-19
+#   Em 2026-09-18 uma proposta de desenho foi ao maestro, foi SELADA, e caiu na passada
+#   adversarial do dia seguinte contra DOIS nós `confirmed` do arquivo que estava sendo
+#   editado — um deles tier 9 e textual ("não deve desenhar nada que dependa de opt-in
+#   COMO SALVAGUARDA"), o outro registrando o desenho proposto como JÁ REFUTADO. O hook
+#   da perna de leitura existia para impedir isso e não disparou (era matcher `Read`, e o
+#   trabalho passou por bash — 95,3% da superfície real, medido em 19.084 chamadas).
+#
+#   O hook foi curado. Esta regra é a SEGUNDA CAMADA, e ela existe porque a primeira avisa
+#   no meio de 16.338 chamadas de shell: um aviso ali tem chance real de passar despercebido.
+#   Aqui o sinal chega no PR, onde a proposta já está escrita e ainda dá tempo de voltar.
+#
+# ⚠️ SOFT, E A RAZÃO É DECLARADA, não timidez: esta guarda foi desenhada HORAS depois do
+#   incidente que ela endereça, e o registro do próprio achado diz que mexer às pressas num
+#   mecanismo logo após um incidente é como o incidente. SOFT dá a ela um ciclo de uso real
+#   antes de ganhar dente. O gatilho para promover a HARD: alguém reincidir na classe COM
+#   este aviso na tela — aí o aviso provou ser insuficiente, e não antes.
+#   (E a doutrina desta casa: "nada disso nasce bloqueando — um gate que impede trabalho é
+#   contornado com --no-verify na primeira sexta-feira, e aí se perde o mecanismo E a
+#   informação".)
+check_kg_edit_saw_confirmed() {
+  local base; base="$(git -C "${REPO_ROOT}" merge-base HEAD origin/main 2>/dev/null || true)"
+  [ -n "${base}" ] || return 0            # sem base comparável: não há o que julgar
+  local _r87_graphs
+  _r87_graphs="$(git -C "${REPO_ROOT}" diff --name-only "${base}" HEAD -- '*.kg.yaml' 2>/dev/null \
+             | grep -v '/fixtures/' || true)"
+  [ -n "${_r87_graphs}" ] || return 0     # PR não toca grafo: SEM-OBJETO, e silêncio é correto
+
+  local _r87_slug _r87_art
+  _r87_slug="$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null | tr '/' '-' || true)"
+  _r87_art="${REPO_ROOT}/docs/evolution/review/${_r87_slug}.md"
+  [ -f "${_r87_art}" ] || return 0        # sem resíduo: quem cobra é a REGRA 56, não esta
+
+  # ⚠️ "CITOU ALGUM DOS DE MAIOR IMPACTO", NUNCA "CITOU TODOS" — e a 1ª redação exigia TODOS, o que
+  # a tornava INSATISFAZÍVEL. Medido em 2026-09-19 sobre os 98 grafos versionados (sem fixtures):
+  # mediana 9 nós `confirmed` de impacto>=4 por grafo, 43 grafos com MAIS DE 10, e o pior com 236.
+  # Ela reprovava até o PR que a introduziu (38 nós). Um SOFT permanentemente vermelho não é sinal —
+  # é fundo, e é exatamente a patologia que este PR alega estar curando no hook.
+  # A pergunta satisfazível é outra: *você olhou ALGUM dos de maior impacto?* Citar zero dos três
+  # mais pesados de um grafo que você acabou de editar é o sinal real — foi o caso do incidente.
+  local _r87_g _r87_top _r87_i _r87_hit _r87_silent="" _r87_files=""
+  while IFS= read -r _r87_g; do
+    [ -n "${_r87_g}" ] || continue
+    _r87_top="$(LC_ALL=C awk -F': ' '
+        /^  - id:/         { id=$2; imp=0; conf=0 }
+        /^    impact:/     { imp=$2+0 }
+        /^    status: confirmed/ { conf=1 }
+        (conf==1 && imp>=4 && id!="") { print imp"\t"id; id="" }
+      ' "${REPO_ROOT}/${_r87_g}" 2>/dev/null | LC_ALL=C sort -rn -k1,1 | cut -f2 | sed -n '1,3p' || true)"
+    [ -n "${_r87_top}" ] || continue      # grafo sem `confirmed` de peso: nada a cobrar
+    _r87_hit=0
+    while IFS= read -r _r87_i; do
+      [ -n "${_r87_i}" ] || continue
+      LC_ALL=C grep -qF "${_r87_i}" "${_r87_art}" 2>/dev/null && { _r87_hit=1; break; }
+    done <<< "${_r87_top}"
+    if [ "${_r87_hit}" -eq 0 ]; then
+      _r87_files="${_r87_files}${_r87_g} "
+      [ -z "${_r87_silent}" ] && _r87_silent="$(printf '%s' "${_r87_top}" | tr '\n' ' ')"
+    fi
+  done <<< "${_r87_graphs}"
+
+  if [ -n "${_r87_files}" ]; then
+    violation "SOFT" "docs/evolution/review/${_r87_slug}.md" \
+      "[kg-edit-confirmed] o PR edita ${_r87_files% } e o resíduo não cita NENHUM dos \`confirmed\` de maior impacto desse(s) arquivo(s) (os 3 do topo: ${_r87_silent% }) — não é erro por si, mas foi EXATAMENTE assim que uma proposta selada caiu em 2026-09-19: ela contrariava dois \`confirmed\` do arquivo que estava editando. Basta conferir se algum deles já responde (ou já refuta) o que você propõe."
+  fi
+}
+
+# ===========================================================================
+# REGRA 84 — Índice de leitura do KG em sincronia com os traces [HARD]
+# previne: o hook da perna de leitura mentir POR OMISSÃO
+#   `docs/onion/kg-read-index.tsv` é PROJEÇÃO GERADA de todos os `trace:` do corpus, e é o
+#   que o hook `kg-read-leg.sh` consulta em 8 ms (gerar custa 7.722 ms — por isso é índice
+#   commitado, e não varredura ao vivo). Um índice defasado não faz o hook gritar errado:
+#   faz ele FICAR CALADO sobre um nó que existe. E calado é indistinguível de "não há grafo",
+#   que é exatamente o fail-open que a perna de leitura foi ligada para curar.
+#   Nó novo com `trace:` sem regenerar o índice = a perna de leitura nasce cega para ele.
+# ===========================================================================
+check_kg_read_index_sync() {
+  local idx="${REPO_ROOT}/docs/onion/kg-read-index.tsv"
+  local gen="${SCRIPT_DIR}/kg-trace-resolve.sh"
+  [ -f "${gen}" ] || return 0
+  if [ ! -f "${idx}" ]; then
+    violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): índice AUSENTE — o hook da perna de leitura fica calado para o corpus inteiro. Gere: bash .claude/validation/kg-trace-resolve.sh . --emit-index > docs/onion/kg-read-index.tsv"
+    return
+  fi
+  local new_index; new_index="$(bash "${gen}" "${REPO_ROOT}" --emit-index 2>/dev/null || true)"
+  if [ -z "${new_index}" ]; then
+    violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): o GERADOR devolveu vazio — não regenere por cima (sobrescreveria o índice bom). Falha de ambiente ou parser: rode o gerador à mão e leia o stderr."
+    return
+  fi
+  if ! printf '%s\n' "${new_index}" | LC_ALL=C diff -q - "${idx}" >/dev/null 2>&1; then
+    violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): índice DEFASADO vs os \`trace:\` do corpus — o hook de leitura está cego para os nós que faltam. Regenere: bash .claude/validation/kg-trace-resolve.sh . --emit-index > docs/onion/kg-read-index.tsv"
+  fi
+}
+
+
+# ===========================================================================
+# REGRA 85 — Porta pública espelha o core, com catraca [HARD]
+# previne: a porta MENTIR sobre o que o core é, por falta de re-materialização
+#   O `materialize-door.sh` resolve o COMO se publica. O QUANDO era uma frase —
+#   "toda leva mergeada em main que toque a superfície que viaja" — e frase não
+#   dispara. Medido 2026-09-17: `onion-standalone` estava 377 commits atrás na
+#   superfície que viaja, parado desde 2026-07-19. Não é negligência de ninguém:
+#   é o modo de falha previsível de um gatilho que depende de alguém lembrar.
+#   E o custo é específico: porta defasada não fica "desatualizada", ela MENTE
+#   sobre o core para quem a usa como referência.
+#   CATRACA, nunca muro: reprovar toda porta defasada nasceria vermelho (377) e
+#   seria desligada na primeira sexta-feira. O passivo entra no baseline e SÓ
+#   ENCOLHE; porta que ANDA PARA TRÁS é HARD. Porta nova nasce com teto BAIXO,
+#   porque não tem passivo a carregar.
+#   Conta só commit que tocou as raízes de `--emit-scrub-roots`: commit de
+#   biografia não defasa a porta — ela não o receberia de qualquer forma.
+# ===========================================================================
+check_door_staleness() {
+  local sc="${SCRIPT_DIR}/door-staleness-check.sh"
+  [ -f "${sc}" ] || return 0
+  local out rc=0
+  out="$(bash "${sc}" "${REPO_ROOT}" 2>&1)" || rc=$?
+  [ "${rc}" -eq 0 ] && return 0
+  local line
+  while IFS= read -r line; do
+    case "${line}" in
+      *ANDOU-PARA-TRAS*|*SEM-BASELINE*|*PIN-DESCONHECIDO*)
+        violation "HARD" "docs/evolution/federation/members.yaml" "REGRA 85 (Porta pública espelha o core, com catraca): ${line} — re-materialize (bash ops/materialize-door.sh <clone>) e atualize o pin no registro, ou baixe o teto em door-staleness-baseline.txt se a porta foi publicada. Porta defasada MENTE sobre o core."
+        ;;
+      ERRO*) violation "HARD" ".claude/validation/door-staleness-check.sh" "REGRA 85 (Porta pública espelha o core, com catraca): a guarda não pôde julgar — ${line}" ;;
+    esac
+  done <<< "${out}"
+}
+
+# ===========================================================================
+# REGRA 86 — Workflow de CI PARSEIA como YAML [HARD]
+# previne: workflow inexecutável passando por existente, e guarda morta por sintaxe
+#   Medido 2026-09-17: `onion-review-diagnose.yml` tinha DOIS blocos `env:` no mesmo
+#   job e o YAML inteiro não parseava. Ele ficou INEXECUTÁVEL — e com ele a instrução
+#   que o `onion-review.yml` dá em prosa: *"não reescreva causa neste bloco sem rodar
+#   o diagnóstico"*. A doutrina mandava não adivinhar e apontava para um instrumento
+#   morto; adivinhar virava a única coisa que sobrava.
+#   POR QUE NADA PEGOU, e é a forma do defeito: o `workflow_dispatch` só falha quando
+#   alguém DISPARA, e o gatilho `pull_request` do arquivo é restrito a ele mesmo —
+#   ninguém mais o tocou desde que quebrou (um dia inteiro). O harness CONTAVA os
+#   workflows (`harness-inventory.sh`) e nunca os LIA: contar não é validar, e SSOT
+#   que conta artefato quebrado conta um número que parece saúde.
+#   Guarda que só se exercita quando invocada à mão envelhece calada.
+# ===========================================================================
+# REGRA 88 — Job de workflow que EXECUTA arquivo do repo faz checkout [HARD]
+# previne: job sem `actions/checkout` invocando script versionado; o bash sai 127 e o `rc != 0`
+#          vira reprovacao de TODO PR, com mensagem que acusa o codigo revisado em vez do gate.
+#
+# POR QUE EXISTE (medido 2026-09-20, achado por passada adversarial, NAO por leitura): o job
+# `onion-review-verdict` viveu meses sem arvore — e com razao, so lia `needs.*.outputs`. Ao mover
+# a decisao do gate para um script do repo, introduzi a PRIMEIRA dependencia de arquivo naquele
+# job e nao percebi. Sem checkout: `bash .claude/validation/review-verdict.sh` -> 127 -> exit 1 em
+# TODO PR revisado, inclusive os `conforme` (44 dos ultimos 56), com a mensagem FALSA "apontou 0
+# violação(ões)". E o PR que introduzia o defeito NAO podia mede-lo: editar `onion-review.yml`
+# faz a action se auto-pular, entao o caminho so acenderia no PR SEGUINTE, ja em main.
+#
+# TETO DECLARADO: olha `run:` de steps do MESMO job e procura invocacao de caminho versionado por
+# prefixo conhecido. Nao resolve variavel (`${{ env.X }}/s.sh`), nao segue `uses:` de action
+# composta, e nao sabe de `working-directory`. Cobre a forma que produziu o incidente; o que nao
+# alcanca, nao finge alcancar.
+check_workflow_job_needs_checkout() {
+  command -v python3 >/dev/null 2>&1 || return 0   # sem parser nao se opina (skip gracioso)
+  local out
+  out="$(python3 - "${REPO_ROOT}" <<'PYCK'
+import sys, os, glob, yaml
+root = sys.argv[1]
+PREF = ('.claude/', 'ops/', '.githooks/', 'scripts/', './.claude/', './ops/')
+bad = []
+for wf in sorted(glob.glob(os.path.join(root, '.github', 'workflows', '*.yml'))
+                 + glob.glob(os.path.join(root, '.github', 'workflows', '*.yaml'))):
+    try:
+        doc = yaml.safe_load(open(wf, encoding='utf-8'))
+    except Exception:
+        continue                      # YAML quebrado e assunto de check_workflows_parse
+    if not isinstance(doc, dict):
+        continue
+    for jname, job in (doc.get('jobs') or {}).items():
+        if not isinstance(job, dict):
+            continue
+        steps = job.get('steps') or []
+        if not isinstance(steps, list):
+            continue
+        tem_checkout = any(
+            isinstance(st, dict) and str(st.get('uses') or '').startswith('actions/checkout')
+            for st in steps)
+        if tem_checkout:
+            continue
+        for st in steps:
+            if not isinstance(st, dict):
+                continue
+            run = st.get('run')
+            if not isinstance(run, str):
+                continue
+            for linha in run.splitlines():
+                t = linha.strip()
+                for tok in t.split():
+                    if tok.startswith(PREF) and (tok.endswith('.sh') or tok.endswith('.py')):
+                        bad.append((os.path.relpath(wf, root), jname, tok))
+                        break
+                else:
+                    continue
+                break
+for w, j, tok in bad:
+    print('%s\t%s\t%s' % (w, j, tok))
+PYCK
+)" || return 0
+  [ -n "${out}" ] || return 0
+  # ⚠️ CATRACA, NAO HARD NU — e a razao esta escrita no cabecalho da guarda de idioma desta casa:
+  #    "dividas existente e SOFT e ocorrencia NOVA e HARD; nascer HARD sobre divida velha e como se
+  #    ensina a desligar um gate". Esta regra VIAJA no `lint-artifacts.sh`, entao todo adotante a
+  #    recebe — e um adotante com 3 jobs nessa forma teria 3 HARD no dia 1, sobre workflows que o
+  #    Onion nao escreveu. Baseline vazio AQUI (0 violacoes medidas); o adotante gera o dele com
+  #    `--emit-baseline`. Mesmo padrao da REGRA 45 e da REGRA 49.
+  local _r88_base="${SCRIPT_DIR}/workflow-checkout-baseline.txt" _r88_tol=0
+  local wf job tok _r88_key _r88_sev
+  while IFS=$'\t' read -r wf job tok; do
+    [ -n "${wf}" ] || continue
+    _r88_key="${wf}	${job}"
+    if [ -f "${_r88_base}" ] && LC_ALL=C grep -qxF "${_r88_key}" "${_r88_base}"; then
+      _r88_tol=$((_r88_tol+1)); continue
+    fi
+    violation "HARD" "${wf}" "REGRA 88 (Job de workflow que EXECUTA arquivo do repo faz checkout): job \`${job}\` roda \`${tok}\` e NAO tem step \`actions/checkout\` — sem arvore o bash sai 127 e o job reprova TODO PR, culpando o codigo revisado em vez do proprio gate"
+  done <<< "${out}"
+  [ "${_r88_tol}" -gt 0 ] && violation "SOFT" "${_r88_base#"${REPO_ROOT}/"}" "REGRA 88 (Job de workflow que EXECUTA arquivo do repo faz checkout): [workflow-checkout/PASSIVO] ${_r88_tol} job(s) tolerado(s) pelo baseline — a metrica de saude e este numero DIMINUINDO"
+  return 0
+}
+
+check_workflows_parse() {
+  command -v python3 >/dev/null 2>&1 || return 0   # sem parser não se opina (skip gracioso)
+  local wf
+  while IFS= read -r wf; do
+    [ -n "${wf}" ] || continue
+    [ -f "${REPO_ROOT}/${wf}" ] || continue
+    # ⚠️ `yaml.safe_load` SOZINHO NÃO BASTA, e a bancada me pegou nisto na primeira redação desta
+    # guarda: o YAML padrão ACEITA chave duplicada (fica com a última), enquanto o parser do
+    # GitHub a REJEITA. Ou seja, a versão ingênua desta regra passaria verde no defeito EXATO que
+    # a originou (`env:` duplicado) — meia-cura, que nesta casa é cura nenhuma. O loader abaixo
+    # levanta na duplicata, que é o contrato do consumidor real.
+    local err
+    err="$(python3 - "${REPO_ROOT}/${wf}" 2>&1 <<'PYWF'
+import sys, yaml
+class Estrito(yaml.SafeLoader): pass
+def _sem_duplicata(loader, node, deep=False):
+    vistas = set()
+    for k, _ in node.value:
+        chave = loader.construct_object(k, deep=deep)
+        if chave in vistas:
+            raise yaml.constructor.ConstructorError(
+                None, None, "chave duplicada: '%s' (o GitHub rejeita; o YAML padrao aceita e fica com a ultima)" % (chave,), k.start_mark)
+        vistas.add(chave)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+Estrito.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _sem_duplicata)
+with open(sys.argv[1], encoding='utf-8') as fh:
+    yaml.load(fh, Loader=Estrito)
+PYWF
+)" && continue
+    violation "HARD" "${wf}" "REGRA 86 (Workflow de CI PARSEIA como YAML): o arquivo NÃO parseia — o GitHub recusa o workflow inteiro e ele fica inexecutável, mas segue no repo parecendo vivo ($(printf '%s' "${err}" | tr '\n' ' ' | cut -c1-160))"
+  done < <(git -C "${REPO_ROOT}" ls-files '.github/workflows/*.yml' '.github/workflows/*.yaml' 2>/dev/null)
+}
+
 # ===========================================================================
 # REGRA 16 — Contagem de inventário-TOTAL divergente da SSOT [SOFT]
 # previne: contagem-TOTAL do inventário divergindo da SSOT
@@ -2695,7 +3162,7 @@ check_kg_provenance_coverage() {
 #   testa a verdade é o worker do kg-freshness, contra o vivo.
 #   Toda a lógica (escopo, catraca, fail-closed) vive em kg-verification-coverage.sh.
 #   MEIA-VIDA POR CLASSE fica GATED (hoje 0 nós com carimbo vencido — regra sobre conjunto
-#   vazio é cerimônia): docs/analysis/onion-adr-kg-halflife-2026-08.md.
+#   vazio é cerimônia): `onion-adr-kg-halflife-2026-08` (core-only).
 # ===========================================================================
 check_kg_verification_coverage() {
   local helper="${SCRIPT_DIR}/kg-verification-coverage.sh"
@@ -3251,6 +3718,21 @@ check_vendored_surface_clean() {
   local terms term f
   # (1) nomes COMERCIAIS marcados (derivados, menos os marcadores que são vocabulário das guardas)
   terms="$(bash "${helper}" --emit-terms 2>/dev/null | grep -vE '^(CONFIDENCIAL|PRIVADO)$' || true)"
+  # (1b) TERMOS DECLARADOS que o registro NÃO conhece — a rede que faltava debaixo de (1) e (2).
+  # MEDIDO 2026-09-18, exposição PÚBLICA e ATIVA: as fixtures da guarda-irmã usavam nomes REAIS de
+  # cliente como exemplo, em `.claude/validation/` — que viaja —, logo no repo público `onion-core`.
+  # A guarda que impede nome de cliente de viajar CONTINHA nomes de cliente, e nada acusou: (1) e (2)
+  # derivam do `members.yaml`, e nenhum daqueles clientes está registrado. É [[vendor-scrub-blind-spot]]
+  # com dano consumado em vez de hipótese.
+  # POR QUE UM ARQUIVO À PARTE, e não registrar no members.yaml: o `name:` de um membro é PROJETADO
+  # para o console e o mapa públicos — registrar um cliente sob NDA ali trocaria um vazamento por
+  # outro. Aqui o nome entra para ser PROCURADO, nunca exibido. E o arquivo vive em
+  # `docs/evolution/`, que NÃO viaja: uma lista de nomes de cliente que viajasse seria o vazamento.
+  local _ct="${REPO_ROOT}/docs/evolution/federation/client-terms.txt"
+  if [ -f "${_ct}" ]; then
+    terms="${terms}
+$(grep -vE '^[[:space:]]*(#|$)' "${_ct}" || true)"
+  fi
   # (2) IDS de ADOTANTE — o id também identifica o cliente (um id pode ser nome de pessoa, ou mapear direto na marca).
   #     Derivados do members.yaml, EXCLUINDO os nomes do PRÓPRIO framework (onion-*) e do maestro (marcio*).
   #     Decisão do maestro 2026-07-22: a superfície portável não nomeia parceiros; o crédito nominal fica no
@@ -3519,7 +4001,12 @@ check_kg_narration_valid() {
 check_onion_version_tracked() {
   local stamp="${REPO_ROOT}/.claude/.onion-version"
   [ -f "${stamp}" ] || return 0
-  grep -qE '^(role:[[:space:]]*(adopted|hub)|decoupled_from:)' "${stamp}" 2>/dev/null || return 0   # adotante, hub OU fonte-desacoplada (todos carregam stamp que o clone precisa trackear)
+  # ⚠️ LE O PORTEIRO, NAO RE-DERIVA: esta linha era a SEGUNDA FORMA do mesmo predicado, sem o
+  # `_ROLE_TAIL` — exatamente o rombo que o comentario de :84-92 declara ter fechado ("um predicado,
+  # um lugar"). Com `role: standaloneX` num stamp editado a mao, ela casava por prefixo e o
+  # `IS_DERIVED` nao. Reusar a variavel mata a divergencia e faz a bancada de vocabulario cobrir os
+  # dois de uma vez. Achado da passada adversarial deste PR.
+  [ "${IS_DERIVED}" -eq 1 ] || return 0   # adotante, hub OU fonte-desacoplada (todos carregam stamp que o clone precisa trackear)
   git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1 || return 0     # precisa ser repo git
   if [ -n "${ONLY_PATH}" ]; then
     case "${ONLY_PATH}" in "${stamp}") : ;; *) return 0 ;; esac
@@ -3771,6 +4258,12 @@ check_no_direct_provider_calls
 check_abstraction_methods_exist
 check_context_freshness_stamp
 check_inventory_total_drift
+check_model_version_fora_da_ssot
+check_kg_read_index_sync
+check_kg_edit_saw_confirmed
+check_door_staleness
+check_workflows_parse
+check_workflow_job_needs_checkout
 check_frontmatter_scalar_colon
 check_no_claude_docs
 check_evolution_links

@@ -34,6 +34,20 @@ const SLUG = String(A.slug || 'research').replace(/[^a-z0-9-]/gi, '-').toLowerCa
 const REVISIT = String(A.revisit || '')
 const CADENCE_OVERRIDE = Number(A.cadenceDays || 0)   // F4: força a cadência da revisita ("revisite agora"); 0 = o seletor decide pelo tipo dominante   // F4: caminho de um .kg.yaml a REVISITAR — re-mede só os nós vencidos, apenda SUPERSEDES, atualiza review_after   // research | decision (F3): decision = Elenxo + nó D_ open para o maestro selar
 const KG_PATH = REVISIT || String(A.kgPath || ('docs/evolution/research/' + SLUG + '-' + TODAY.slice(0, 7) + '/' + SLUG + '-' + TODAY.slice(0, 7) + '.kg.yaml'))
+// ⚠️ `kgPath` É RELATIVO À RAIZ DO REPO, NUNCA AO CWD DO PROCESSO — e isto precisou virar texto
+// porque custou um grafo. Sinal de campo 2026-09-07 (item 4): a sessão trocou de worktree no meio
+// do run (`EnterWorktree`), o agente de escrita resolveu o caminho contra o cwd DAQUELE momento, e
+// o KG de um adotante nasceu na worktree errada — sem erro, sem aviso, radar exit 0 sobre o arquivo
+// no lugar errado. O script não tem filesystem (não há `path.resolve` aqui), então a cura tem duas
+// metades, e a segunda é a que MEDE: (a) todo prompt de escrita manda ancorar na raiz via
+// `git rev-parse --show-toplevel`; (b) o agente DEVOLVE o caminho absoluto que de fato escreveu, e
+// o log o imprime — se cair fora, aparece, em vez de sumir. Declaração não basta; o retorno é o
+// que prova.
+const KG_ANCHOR = '\n\n⚠️ ANCORAGEM DO CAMINHO (não negociável): `' + KG_PATH + '` é relativo à RAIZ DO '
+  + 'REPO, não ao seu cwd. ANTES de escrever, rode `cd "$(git rev-parse --show-toplevel)"` e escreva '
+  + 'a partir dali. Ao devolver `kgPath`, devolva o caminho ABSOLUTO que você realmente escreveu '
+  + '(saída de `readlink -f`), não o relativo que recebeu — uma sessão que troca de worktree no meio '
+  + 'do run já fez um grafo nascer na árvore errada com radar exit 0.'
 let CORPUS = String(A.corpus || '')
 const MODE = String(A.mode || 'research')
 // ─── mode: 'primaries' — as lacunas JÁ TÊM NOME (F5) ───
@@ -87,8 +101,26 @@ const ELENXO_SCHEMA = { type: 'object', required: ['objections', 'recommendation
   objections: { type: 'array', items: { type: 'object', required: ['target', 'kind', 'survives', 'evidence'], properties: {
     target: { type: 'string' }, kind: { enum: ['finding', 'discarded-by-evidence', 'discarded-by-comodismo'] }, survives: { type: 'boolean' }, evidence: { type: 'string' } } } },
   recommendation: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } } }
+
+// ── a metade que MEDE (a 1a versao desta cura nao media nada) ────────────────────────────────
+// A passada adversarial de 2026-09-22 derrubou o `KG_ANCHOR` como "100% prosa": o comentario
+// afirmava "declaracao nao basta; o retorno e o que prova" e nao havia UMA assercao sobre o
+// caminho devolvido — `kgPath` era `{ type: 'string' }` puro, e o codigo so LOGAVA o que o agente
+// dissesse. O mecanismo estava a mao no mesmo arquivo: `decisionNodeId` ja usa `pattern: '^D_'`.
+// Agora o schema exige `^/` (absoluto) e esta funcao exige que o absoluto TERMINE no relativo
+// pedido — um grafo escrito na worktree errada devolve outro sufixo e o run FALHA, em vez de sair
+// verde sobre o arquivo errado. Teto declarado: o caminho ainda e AUTO-RELATADO pelo agente; isto
+// pega o erro honesto (cwd trocado), nao um agente que minta sobre onde escreveu.
+function kgPathOk(reported) {
+  const abs = String(reported || '')
+  if (!abs.startsWith('/')) return 'nao e absoluto: ' + abs
+  const wanted = KG_PATH.replace(/^\.\//, '')
+  if (!abs.endsWith(wanted)) return 'o absoluto devolvido (' + abs + ') NAO termina no caminho pedido (' + wanted + ') — o grafo pode ter nascido noutra worktree'
+  return ''
+}
+
 const KG_SCHEMA = { type: 'object', required: ['kgPath', 'radarExit', 'nodes', 'edges', 'summary'], properties: {
-  kgPath: { type: 'string' }, radarExit: { type: 'integer' }, nodes: { type: 'integer' }, edges: { type: 'integer' }, summary: { type: 'string' },
+  kgPath: { type: 'string', pattern: '^/' }, radarExit: { type: 'integer' }, nodes: { type: 'integer' }, edges: { type: 'integer' }, summary: { type: 'string' },
   decisionNodeId: { type: 'string' }, optionNodeIds: { type: 'array', items: { type: 'string' } }, constrainsEdges: { type: 'integer' } } }
 // modo decisão: o schema EXIGE o nó D_ e as arestas CONSTRAINS — a camada de tool força o agente a produzi-los.
 // (1º dogfood do F3: o patch mirou uma âncora inexistente e o agente NUNCA recebeu o bloco de decisão — 5 nós, 0 D_)
@@ -252,10 +284,12 @@ if (MODE === 'primaries') {
     '\n\n### Fontes inalcançáveis\n' + (unreachable.length ? unreachable.join(', ') : '(nenhuma)') +
     '\n\n### Corpus prévio\n' + (CORPUS || '(vazio)') +
     '\n\n### Elenxo\n' + JSON.stringify(pElenxo || {}).slice(0, 7000) +
+    KG_ANCHOR +
     '\n\n## Passos\n1. Read do arquivo (se existir). 2. Write/Edit. 3. `bash .claude/validation/kg-radar.sh ' + KG_PATH + ' --integrity --schema` — capture o exit code; se ≠ 0, CORRIJA e rode de novo (máx 3 tentativas). 4. Devolva kgPath, radarExit (o último), nodes (os ADICIONADOS nesta rodada), edges (idem), nodesTotal (o total do grafo ao fim) e summary (1 frase).\n\n' +
     'Somente saída estruturada.',
     { label: 'write-kg-primarias', phase: 'write(KG)', schema: KG_SCHEMA_PRIMARIES, model: TIER.judge.model, effort: TIER.judge.effort })
   if (!pKg) return { error: 'write(KG) não devolveu resultado — o grafo não foi escrito. Nada selado.', question: QUESTION, anchoredCount: anchored.length, elenxo: pElenxo }
+  { const _e = kgPathOk(pKg.kgPath); if (_e) return { error: 'write(KG): ' + _e, question: QUESTION, kgPath: pKg.kgPath } }
   if (pKg.radarExit !== 0) return { error: 'radar exit ' + pKg.radarExit + ' em ' + pKg.kgPath + ' — grafo escrito mas ILEGÍVEL pelo motor; não conte a rodada como feita.', question: QUESTION, kgPath: pKg.kgPath, radarExit: pKg.radarExit }
   log('write(KG): ' + pKg.kgPath + ' — +' + pKg.nodes + ' nós / +' + pKg.edges + ' arestas, total ' + pKg.nodesTotal + ', radar exit ' + pKg.radarExit)
 
@@ -426,6 +460,7 @@ if (MODE === 'decision') {
 // ─── write(KG): um agente ESCREVE o grafo, roda o radar, devolve o exit ───
 phase('write(KG)')
 const kg = await agent(
+  KG_ANCHOR +
   '## write(KG) — escreva o grafo da pesquisa e prove que o radar o lê\n\nPergunta: "' + QUESTION + '"\nData de hoje (verified_at): ' + TODAY + '\nCaminho do grafo: ' + KG_PATH + '\n\n' +
   'Leia ANTES: .claude/rules/kg-grammar.md e .claude/commands/common/prompts/research-doctrine.md (cláusulas 7-8). Formato estrito: uma chave por linha; arestas em bloco (- from:/to:/edge_type:); id em inglês, label em pt-BR; meta com id, schema_version "1", baseline ' + TODAY + ', review_after (cadência: ferramenta/preço 30d · modelos 45d · mercado 90d · benchmark 120d · doutrina 12m — escolha pelo tipo dominante e justifique em comentário), `# kg-backlog-guard: on` e `# ═══ TETO: N NÓS ═══`.\n\n' +
   (MODE === 'decision' && elenxo ? '## MODO DECISÃO — LEIA PRIMEIRO. Este grafo é de DECISÃO. OBRIGATÓRIO (o schema de retorno exige; sem isto o run falha): (1) 1 nó decision `D_…` com status OPEN (o maestro sela — você NUNCA sela), label = a decisão + as opções nomeadas + a recomendação do Elenxo; (2) 1 nó claim por OPÇÃO (`C_OPCAO_…`, status open) — opções: ' + JSON.stringify(elenxo.options || []) + '; (3) para cada objeção SOBREVIVENTE do Elenxo, 1 nó evidence `E_OBJECAO_…` (plane DEV, confirmed, verified_at hoje, verified_against = a evidência da objeção) com aresta CONSTRAINS para a opção/decisão que ela limita (dissent que LIMITA é CONSTRAINS; REFUTES só para opção morta por evidência, e aí o status da opção vira refuted); (4) devolva decisionNodeId, optionNodeIds e constrainsEdges (contagem REAL das arestas escritas); (5) se o TETO de nós impedir modelar TODAS as objeções sobreviventes, o nó E_LACUNAS_… declara a contagem EXATA (N sobreviventes, M modeladas) e NOMEIA o alvo de cada uma não modelada — nunca um número menor que o real (1º dogfood 2026-09-13: 40 sobreviventes, 10 nós, e o grafo dizia "3 reabertos"); (6) objeção do Elenxo é afirmação de UM agente sem votação: confidence ≤ 0.6, e fonte primária que ele CITA sem ter sido lida na rodada entra no label como "primário citado, não lido" — nunca como tier alto confirmado. Objeções do Elenxo: ' + JSON.stringify(elenxo.objections).slice(0, 6000) + ' Recomendação: ' + webText(elenxo.recommendation).slice(0, 1500) + '\n\n' : '') +
@@ -438,6 +473,7 @@ const kg = await agent(
   { label: 'write-kg', phase: 'write(KG)', schema: (MODE === 'decision' && elenxo) ? KG_SCHEMA_DECISION : KG_SCHEMA, model: TIER.judge.model, effort: TIER.judge.effort })
 if (!kg) return { error: 'write(KG) não devolveu resultado — o grafo não foi escrito. Nada selado.', question: QUESTION, findings: report ? report.findings : [] }
 if (MODE === 'decision' && elenxo && (!kg.decisionNodeId || !(kg.constrainsEdges >= 1))) return { error: 'modo decisão sem nó D_/CONSTRAINS no grafo — o write(KG) não cumpriu o contrato de decisão; nada selado.', question: QUESTION, kgPath: kg.kgPath, radarExit: kg.radarExit }
+{ const _e = kgPathOk(kg.kgPath); if (_e) return { error: 'write(KG): ' + _e, question: QUESTION, kgPath: kg.kgPath } }
 if (kg.radarExit !== 0) return { error: 'radar exit ' + kg.radarExit + ' em ' + kg.kgPath + ' — grafo escrito mas ILEGÍVEL pelo motor; não conte a pesquisa como feita.', question: QUESTION, kgPath: kg.kgPath, radarExit: kg.radarExit }
 log('write(KG): ' + kg.kgPath + ' — ' + kg.nodes + ' nós / ' + kg.edges + ' arestas, radar exit ' + kg.radarExit)
 
