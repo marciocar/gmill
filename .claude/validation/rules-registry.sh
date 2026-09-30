@@ -163,12 +163,12 @@ CATEGORIES = [
      [10, 11]),
     ("SSOT anti-drift",
      "Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, mapas, plugins, topologia.",
-     [8, 9, 16, 19, 21, 27, 37, 39, 41, 50, 59, 62, 63, 70, 76, 80, 81]),
+     [8, 9, 16, 19, 21, 27, 37, 39, 41, 50, 59, 62, 63, 70, 76, 80, 81, 83, 84, 85]),
     ("KG & proveniência",
      "Conhecimento nasce no grafo e não morre em prosa; proveniência com catraca "
      "(por citação e por marcador autodeclarado); e frescor doutrinário — afirmação "
      "sensível-ao-tempo carimbada e dentro do TTL.",
-     [26, 29, 31, 32, 42, 43, 47, 49, 52, 55, 57, 58, 67, 68, 69, 78, 82]),
+     [26, 29, 31, 32, 42, 43, 47, 49, 52, 55, 57, 58, 67, 68, 69, 78, 82, 87]),
     ("Automação Graduada",
      "Classes de ação (HUMAN→MONITORED→DYNAMIC→AUTO) sobem de degrau com gate de promoção alcançável — nenhum rung-jump forjado.",
      [44, 65]),
@@ -189,8 +189,13 @@ CATEGORIES = [
      "As demais categorias perguntam 'achei violação?'. Esta pergunta 'eu cheguei a "
      "olhar?' — porque varredura cega devolve zero violações, que é indistinguível de "
      "conformidade. Categoria nova em 2026-08-04, quando o lint rodou de dentro de um "
-     "worktree de harness e varreu 0 dos 51 agentes sem emitir uma linha de aviso.",
-     [54]),
+     "worktree de harness e varreu 0 dos 51 agentes sem emitir uma linha de aviso. "
+     "A REGRA 86 entrou aqui em 2026-09-17 pelo mesmo motivo, um andar acima: um workflow "
+     "que não PARSEIA não é um gate que falhou, é um gate que nunca rodou — e o repo o "
+     "contava como existente. A REGRA 88 entrou em 2026-09-20 pela versão mais perversa da "
+     "classe: o gate rodava, mas sem árvore — `bash <script do repo>` saía 127, o job reprovava "
+     "TODO PR e a mensagem culpava o código revisado. Gate que nunca olhou, acusando.",
+     [54, 86, 88]),
 ]
 
 seen = {}

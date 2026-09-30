@@ -1,0 +1,1 @@
+# Baseline semeado por regen-baselines --ensure-from (sera emitido do corpus do alvo).

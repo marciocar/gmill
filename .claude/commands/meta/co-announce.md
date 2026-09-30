@@ -12,7 +12,7 @@ argument-hint: "[--reconcile | <data-ou-slug-da-entrada>]  (sem arg = última en
 # 📣 /meta:co-announce — Anunciar mudança aos adotantes (downstream, doc-bridge)
 
 Transforma uma entrada do `docs/evolution/federation/CHANGELOG.md` num **anúncio pronto-para-transportar**
-no `inbound/` do adotante. Fecha o gap do [backlog #6](../../../docs/analysis/onion-coevolution-backlog-2026-06-18.md):
+no `inbound/` do adotante. Fecha o gap do backlog #6 (`onion-coevolution-backlog-2026-06-18`, core-only):
 a capacidade de downstream existe, mas o anúncio **nunca era exercido** ao shipar — dependia de o humano lembrar.
 
 > **O que este comando NÃO é.** Não é o relatório auto-emitido de `/meta:adopt --update` (esse é
@@ -117,6 +117,31 @@ existir no `members.yaml` → **avisar** (registro ausente) e seguir só com os 
 
 ## Passo 4 — Escrever o rascunho na staging (outbox do core)
 
+> ### ⚠️ NÚMERO SOBRE O ESTADO DO ALVO SAI DA MEDIÇÃO, NUNCA DA PROSA
+>
+> **O anúncio é o único documento que chega ANTES do merge** — o adotante que lê só ele decide com
+> base nele. Sinal de campo (2026-08-31, re-medido em 2026-09-16): um anúncio afirmou *"as portas
+> estão OK: nenhuma sem prefixo de bind"* enquanto **a catraca da mesma leva tinha contado 38
+> exposições**, e o relatório dentro da própria branch dizia o número certo. Dois artefatos da mesma
+> leva discordando — um dizia **0**, o outro **38**. Quem leu o anúncio concluiu que não havia o que
+> fazer, e a dívida tolerada ficou tolerada **para sempre, porque ninguém foi avisado**.
+>
+> O mesmo anúncio citava *"3 fallbacks de senha"* onde o padrão produzia **19 em 10 variáveis**: quem
+> aplicasse "o fix de 3 linhas" curaria **16% da classe** achando ter curado a classe.
+>
+> **Regra, e ela é de derivação, não de cuidado:**
+> 1. Ao descrever estado **verificável** do alvo, **rode a medição e cole o número dela** — baseline
+>    da catraca, saída do gate, contagem do próprio script. Nunca reafirme em prosa o que um artefato
+>    mede.
+> 2. Se o número **não estiver disponível** na geração, escreva **"não medido"** — nunca afirme o
+>    estado. `[papel/SEM-OBJETO]` é a forma canônica desta casa para ausência legítima.
+> 3. **Anúncio e relatório da mesma leva não podem discordar** sobre uma contagem que ambos citam.
+>    Se discordarem, o errado é o anúncio (o relatório nasce junto do artefato).
+>
+> Classe: **declarado ≠ medido**, no único artefato que viaja sozinho.
+> Fio: `A_ANUNCIO_DERIVA_O_NUMERO_DA_MEDICAO` em `docs/onion/graph/fios-abertos.kg.yaml`.
+
+
 Para cada destinatário, escrever `docs/evolution/federation/outbox/<id>/<data-da-entrada>-<slug>.md`
 (`mkdir -p` do dir + `_processed/`). Envelope **simétrico** ao `inbound/` que o adotante já entende
 (ver `/meta:adopt` § Procedimento de Relatório Downstream):
@@ -182,7 +207,7 @@ ou, sem destinatário:
 
 - Consumidor/orientação: [`/meta:co-evolve`](co-evolve.md) (lê inbox/inbound, gerencia)
 - Envelope irmão: [`/meta:adopt`](adopt.md) § Procedimento de Relatório Downstream
-- Protocolo dos 3 fluxos: [docs/evolution/README.md](../../../docs/evolution/README.md)
-- Registro de adotantes: [members.yaml](../../../docs/evolution/federation/members.yaml) · Anúncios: [CHANGELOG.md](../../../docs/evolution/federation/CHANGELOG.md)
+- Protocolo dos 3 fluxos: `docs/evolution/README.md` (core-only, não viaja)
+- Registro de adotantes: `members.yaml` (core-only, não viaja) · Anúncios: `CHANGELOG.md` (core-only, não viaja)
 - Ledger de contratos (federação formal): [`/meta:federation-publish`](federation-publish.md)
-- Origem: backlog de co-evolução [item #6](../../../docs/analysis/onion-coevolution-backlog-2026-06-18.md)
+- Origem: backlog de co-evolução item #6 (`onion-coevolution-backlog-2026-06-18`, core-only)

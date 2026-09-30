@@ -48,9 +48,10 @@ nodes:
     status: confirmed
     impact: 4
     confidence: 1.0
-    verified_at: 2026-09-16
-    verified_against: stamp-claude-onion-version-lido-na-adocao
-    label: "Framework instalado: pin `9711a7dc89d0`, modo `greenfield`, papel `hub`, branch de integração `(não declarado — resolvido por PR)`. Atualizar depois com /meta:adopt --update a partir do core — o merge de `onion/vendor` transforma customização local em conflito git real, resolvível, em vez de sobrescrita silenciosa."
+    verified_at: 2026-09-23
+    verified_against: stamp-claude-onion-version-relido-apos-o-update
+    trace: .claude/.onion-version
+    label: "Framework instalado: pin `cff9214c3b9a`, modo `greenfield`, papel `hub`, branch de integração `main`. ATUALIZADO de `be2913366c5c` por /meta:adopt --update em 2026-09-23: 116 commits do core (51 na superfície que viaja), 70 arquivos, merge de `onion/vendor` LIMPO (rc=0) e gate re-provado por execução. Histórico: adotado em `9711a7dc89d0` e atualizado para `be2913366c5c` em 2026-09-16. O merge é o mecanismo: customização local vira conflito git real, resolvível, em vez de sobrescrita silenciosa."
 
   - id: DETERMINISTIC_GATE
     layer: domain

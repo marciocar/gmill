@@ -5,7 +5,7 @@
 #   1. `ls -d <path-errado>` → vazio → concluí "o workflow não sobreviveu". Estava vivo; o path
 #      é que omitia um segmento. Relancei em duplicata.
 #   2. `bash script > /tmp/x 2>&1; RC=$?` … `tail x | ...; echo $?` → li o exit do `tail`, não do script.
-#   3. `sudo -n ls /home/onion/.../.env.bak-*` → o glob expande no MEU shell (sem acesso a /home/onion),
+#   3. `sudo -n ls <dir-de-outra-conta>/.env.bak-*` → o glob expande no MEU shell (que não tem acesso),
 #      não sob sudo; `2>/dev/null` engoliu o erro; `wc -l` deu 0 → "a dívida sumiu". Eram 7.
 #
 # O PADRÃO COMUM, e é UM só: resultado VAZIO/ZERO por motivo OPERACIONAL (sem acesso, path errado,
@@ -121,7 +121,7 @@ case "$cmd" in *pipefail*) : ;; *)
           if (q != "") return s        # aspas ABERTAS no fim da linha: indeterminado -> crua
           return o
         }
-      function ultimoQ(s,   pos, off, ult) {
+      function lastQ(s,   pos, off, ult) {
         off = 0; ult = 0
         while ((pos = index(substr(s, off + 1), "$?")) > 0) { ult = off + pos; off = ult + 1 }
         return ult
@@ -142,7 +142,7 @@ case "$cmd" in *pipefail*) : ;; *)
         # de verdade. Lendo os dois em `nu`, `ls | wc -l; echo "rc=$?"` ficava sem `$?` nenhum e a
         # guarda CALAVA — o modo-de-falha nº2 que a FUNDOU, cegado pela cura de ordem. Achado por
         # passada adversarial, com main DISPARANDO e HEAD calado no mesmo comando.
-        p_ord = index(nu, "|"); q_ord = ultimoQ(cur)
+        p_ord = index(nu, "|"); q_ord = lastQ(cur)
         mesmaLinha = (p_ord > 0 && q_ord > 0 && p_ord < q_ord)
         if (cur ~ /\$\?/ && (mesmaLinha || prevNu ~ /\|/)) { found = 1; exit }
         if (cur ~ /[^ \t]/) { prev = cur; prevNu = nu }       # linha em branco não quebra a vizinhança
@@ -255,6 +255,80 @@ if [ "${_pg_pierced}" -eq 1 ]; then
   add 'COLCHETE-FURADO: seu `pgrep -f "[x]…"` NÃO protege aqui — a forma NUA do padrão aparece na mesma linha de comando (o lançamento, o `echo`, o caminho do script), então o shell do laço se encontra do mesmo jeito e ele trava para sempre. Use `pgrep -A -f` (`--ignore-ancestors`, exclui o próprio shell) ou espere por PID: `while kill -0 "$PID" 2>/dev/null; do sleep 5; done`.'
 elif [ "${_pg_self}" -eq 1 ]; then
   add 'PGREP-QUE-SE-ENCONTRA: `pgrep -f`/`pkill -f` casa a linha de comando do PRÓPRIO shell que o roda — o padrão está escrito ali. Num `until ! pgrep ...` isso trava PARA SEMPRE (medido: 1h06 esperando por si mesmo). Cura mais forte: `pgrep -A -f` (`--ignore-ancestors`). Alternativas: o idioma do colchete `pgrep -f "[l]int-selftest"` (só serve se a forma NUA não estiver na mesma linha) ou esperar por PID com `kill -0`. E nunca mate com um padrão e confira com outro: a conferência tem de usar EXATAMENTE o padrão do `pkill`.'
+fi
+
+# (3c) LAÇO DE ESPERA SEM TETO — irmão do (3b), e a mesma família de dano: esperar parece trabalhar.
+#
+# MEDIDO EM 2026-09-17, e o que prova ser classe é a REINCIDÊNCIA depois da cura: o (3b) já tinha
+# nomeado `until ! pgrep …` preso 1h06, e um mês depois eu escrevi
+#     until [ "$(gh api …/check-runs --jq '… | length')" = "0" ] && [ … -ge 3 ]; do sleep 60; done
+# para um head cujos checks NUNCA nasceram (o PR estava CONFLICTING, e o GitHub não dispara
+# `pull_request` quando não consegue computar o merge). `length` ficou 0 para sempre, a condição
+# `-ge 3` virou inalcançável, e o laço girou 2h21 batendo na API a cada 60s. Quem viu foi o maestro.
+#
+# A diferença entre (3b) e (3c) importa: lá a condição não podia virar falsa por um defeito DO
+# PADRÃO; aqui ela não vira verdadeira porque a PREMISSA caiu. Nenhum regex sabe qual premissa é
+# essa — por isso a guarda não tenta julgar a condição. Ela cobra a única coisa que sempre cabe:
+# um TETO, e uma saída que DIGA QUAL DOS DOIS CASOS ocorreu.
+#
+# Sem isso, "ainda esperando" e "vai esperar para sempre" têm exatamente a mesma aparência: silêncio.
+#
+# ⚠️ ESTE BLOCO USA HERE-STRING, NUNCA `printf … | grep -q` — e a bancada me cobrou isso na 1ª
+# redação, com a catraca subindo de 10 para 12 sítios. `grep -q` fecha no primeiro casamento, o
+# escritor toma EPIPE, e sob `pipefail` o comando reprova COM O PADRÃO PRESENTE. Escrever a guarda
+# do laço sem-teto usando o defeito que outra guarda persegue seria cômico se não fosse reincidência.
+# É a doutrina de monitoramento desta casa aplicada ao próprio operador — *se isto falhasse agora,
+# o meu filtro emitiria alguma coisa?*. O meu não emitiria.
+#
+# ÂNCORA em posição de comando (a lição do (5), que o (3b) pagou de novo por não reusar): só conta
+# `until`/`while` que ABRE statement, senão `grep -n 'until' arquivo` e esta própria mensagem de
+# commit seriam acusados.
+_unbounded_wait=0
+while IFS= read -r _stmt; do
+  _c="$(sed -E 's/^[[:space:]]*//; s/^(!|\(|\{)[[:space:]]+//; s/^[[:space:]]*//' <<< "${_stmt}")"
+  case "${_c}" in until\ *|while\ *) ;; *) continue ;; esac
+  # ⚠️ EXIGE `do` E `done` NO COMANDO — falso-positivo MEDIDO minutos depois de eu escrever esta
+  # guarda: um `ps … | awk '/until |sleep /'` foi acusado, porque o separador `tr ';&|'` não
+  # respeita ASPAS e partiu o regex do awk num fragmento que começa com `until `. O caso (c3) já
+  # cobria `grep -rn "until"`, mas não alternância dentro de string — a mesma lição (ii) deste
+  # arquivo, terceira vez. Laço de verdade tem corpo; menção não tem.
+  grep -qE '(^|[[:space:];&|])do([[:space:]]|$)' <<< "${cmd}" || continue
+  grep -qE '(^|[[:space:];&|])done([[:space:]]|$)' <<< "${cmd}" || continue
+  # ⚠️ O `sleep` É LIDO NO COMANDO INTEIRO, NUNCA NO FRAGMENTO — e a bancada me pegou nisto na 1ª
+  # redação: o separador `tr ';&|'` parte `until …; do sleep 60; done` em TRÊS pedaços, e o pedaço
+  # que abre com `until` não contém `sleep` nenhum. Julgar o fragmento fazia o detector calar
+  # justamente na forma que o originou. O escopo certo é: ÂNCORA no fragmento (para não acusar quem
+  # só menciona a palavra), PRESENÇA DE ESPERA no comando (porque o corpo do laço mora noutro pedaço).
+  grep -qE '(^|[[:space:];&|])sleep([[:space:]]|$)' <<< "${cmd}" || continue
+  # DESARMES — qualquer forma de teto conta, porque o ponto é o teto existir, não como se escreve:
+  #   SECONDS/$EPOCHSECONDS/date +%s → relógio · timeout(1) → teto externo · break → saída explícita
+  #   contador (`i=$((i+1))`) → teto por iteração · --max-time/--deadline → teto do próprio cliente
+  grep -qE '(SECONDS|EPOCHSECONDS|date \+%s|(^|[[:space:]])timeout[[:space:]]|(^|[[:space:];&|])break([[:space:]]|$)|\+[[:space:]]*1[[:space:]]*\)\)|--max-time|--deadline)' <<< "${cmd}" && continue
+  _unbounded_wait=1
+done <<< "$(printf '%s' "${cmd}" | tr ';&|' '\n')"
+
+if [ "${_unbounded_wait}" -eq 1 ]; then
+  add 'LAÇO-DE-ESPERA-SEM-TETO: um `until`/`while` com `sleep` e SEM prazo espera PARA SEMPRE quando a premissa cai — e esperar parece trabalhar (medido 2026-09-17: 2h21 batendo na API por checks que nunca iam nascer, porque o PR estava CONFLICTING). Ponha um teto E uma saída que distinga os dois casos: `fim=$((SECONDS+1800)); until <cond>; do [ $SECONDS -gt $fim ] && { echo "DESISTI: teto, condição nunca satisfeita"; break; }; sleep 60; done`. O teto sozinho não basta — sem a mensagem, "pronto" e "desisti" ficam indistinguíveis.'
+fi
+
+# (3d) CRASE DENTRO DE MENSAGEM DE COMMIT ASPAS-DUPLAS — o shell EXECUTA, não cita.
+#
+# MEDIDO em 2026-09-17, no meio de um commit desta própria sessão: uma mensagem com `docs/` entre
+# crases, dentro de `-m "…"`, virou substituição de comando. O shell tentou EXECUTAR `docs/`, cuspiu
+# `Is a directory`, e a mensagem foi para a história com a palavra COMIDA. O dano daquela vez foi
+# cosmético; a classe não é. Crase em aspas duplas executa QUALQUER COISA, e mensagem de commit é
+# justamente onde se escreve `rm -rf`, `git reset` e afins ao NARRAR o que se fez ou o que se evitou.
+#
+# O idioma markdown desta casa usa crase o tempo todo (`REGRA 45`, `--emit-baseline`), então o risco
+# é ESTRUTURAL, não distração: escrever bem em pt-BR e citar código é exatamente o que dispara.
+#
+# A cura é a forma, não o cuidado: HEREDOC CITADO (`git commit -F - <<'MSG'`) — as aspas simples no
+# delimitador desligam toda expansão. Aspas simples no `-m` também servem, mas quebram no primeiro
+# apóstrofo, que em pt-BR aparece.
+if grep -qE '(^|[[:space:];&|])git[[:space:]]+commit' <<< "${cmd}" \
+   && grep -qE '\-(m|F)[[:space:]]*"' <<< "${cmd}" \
+   && grep -q '`' <<< "${cmd}"; then
+  add 'CRASE-EM-MENSAGEM-DE-COMMIT: há crase dentro de `-m "…"`/`-F "…"` — em aspas DUPLAS o shell EXECUTA o conteúdo da crase em vez de citá-lo (medido 2026-09-17: `docs/` virou `Is a directory` e a palavra sumiu da história; com um comando destrutivo ali dentro, ele teria RODADO). Use heredoc CITADO: `git commit -F - <<'"'"'MSG'"'"'` … `MSG` — as aspas simples no delimitador desligam toda expansão.'
 fi
 
 # (4) comando de DESCOBERTA com saída vazia — o caso que mais custou (o falso "não sobreviveu").

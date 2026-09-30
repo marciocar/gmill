@@ -115,6 +115,30 @@ _base=(.claude/agents .claude/commands .claude/skills .claude/utils .claude/vali
 #                outra granularidade, outro SSOT. Declarar isso aqui é o que impede a próxima
 #                leitura de concluir "ainda é decorativo": para dois dos três papéis, não cortar É
 #                a resposta medida.
+# ⚠️ O CONDUTOR VIAJA COM O MOTOR, OU NENHUM DOS DOIS VIAJA — e esta lista nao tinha os condutores.
+# Medido em 2026-09-18, materializando o `onion-standalone` para decidir se valia re-materializa-lo:
+# a lista cortava os MOTORES da meta-fabrica (`utils/marketplace/`, `utils/wizard/`, e o
+# `commands/meta/adopt.md` pelo corte do `roles.yaml`) e deixava viajar as SKILLS QUE OS CONDUZEM.
+# Resultado: `onion-publish/SKILL.md:71` apontava para `utils/marketplace/materialize-marketplace-repo.sh`
+# e `onion-wizard/SKILL.md:50` para `commands/meta/adopt.md` — os dois caminhos EXPLICITAMENTE
+# cortados por esta mesma funcao. O comando nasce MORTO no consumidor: a skill esta la, o motor nao.
+# E `onion-publish` e declarada core-only na propria doutrina do repo (CLAUDE.md), o que torna a
+# omissao ainda mais clara — nao era duvida de desenho, era item que ninguem lembrou de acrescentar.
+# ⚠️ SO `onion-publish` SAI — E A 1a REDACAO CORTAVA TRES. A passada adversarial derrubou o corte de
+# `onion-wizard` e `onion-onboarding`, e o argumento e melhor que o meu: elas sao o CONDUTOR e o
+# ENSINO do papel, e cortá-las para calar um lint e trocar capacidade por verde. Provas que ela
+# trouxe: (1) QUATRO arquivos que viajam continuam citando as duas em PROSA — entre eles
+# `onion-guided-lifecycle.md`, que descreve a vertical de conducao inteira em termos delas —, entao
+# a porta ganharia uma KB ensinando um caminho de entrada que ela nao tem; (2) o lint NAO pega isso
+# (nao sao caminhos em backtick), logo "0 HARD" ali NAO era evidencia de ausencia; (3) ao contrario
+# de `onion-publish`, `onion-onboarding` NAO e declarada core-only em doutrina nenhuma.
+# O ponteiro morto de `onion-wizard/SKILL.md:50` volta, e a cura dele e ROLE-AWARE no texto da skill
+# (dizer que a transicao `adopt` so existe onde a meta-fabrica existe), nao deletar a skill.
+# A LICAO DE FORMA: lista de exclusao escrita A MAO envelhece pelo que se ACRESCENTA depois dela.
+# Os motores foram cortados quando existiam; as skills nasceram depois e ninguem voltou aqui. Uma
+# derivacao (cortar a skill cujo `trace`/allowed-tools aponta para caminho cortado) seria imune a
+# isso — fica NOMEADO como o proximo passo, nao feito aqui, porque exige extrair o grafo de
+# dependencia skill→motor que hoje so existe em prosa dentro de cada SKILL.md.
 _role_cut() {  # $1=papel → subcaminhos a cortar, um por linha (vazio = nada a cortar)
   case "$1" in
     standalone)
@@ -126,7 +150,8 @@ _role_cut() {  # $1=papel → subcaminhos a cortar, um por linha (vazio = nada a
         .claude/utils/wizard/ \
         .claude/utils/vertical/ \
         .claude/utils/federation-transport/ \
-        .claude/validation/federation-
+        .claude/validation/federation- \
+        .claude/skills/onion-publish/
       ;;
     *) : ;;
   esac
@@ -153,16 +178,16 @@ _role_cut() {  # $1=papel → subcaminhos a cortar, um por linha (vazio = nada a
 # (Mapa role→bundle (roles.yaml) consistente com os verticais) já guarda esse arquivo contra drift,
 # então o corte herda uma guarda que existe em vez de pedir uma nova.
 _emit_command_excludes() {  # $1=REPO $2=papel → :(exclude) dos comandos de meta/ fora do escopo do papel
-  local _repo="$1" _papel="$2" _f _base_nome _tools _resolver
-  [ -n "$(_role_cut "${_papel}")" ] || return 0   # papel que não corta nada também não corta comando
+  local _repo="$1" _role="$2" _f _base_name _tools _resolver
+  [ -n "$(_role_cut "${_role}")" ] || return 0   # papel que não corta nada também não corta comando
   _resolver="${_repo}/.claude/utils/marketplace/resolve-role-bundle.sh"
   [ -f "${_resolver}" ] || return 0               # sem a SSOT não se adivinha: o corte de comando não acontece
-  _tools="$(bash "${_resolver}" "${_papel}" --tools 2>/dev/null)" || return 0
+  _tools="$(bash "${_resolver}" "${_role}" --tools 2>/dev/null)" || return 0
   [ -n "${_tools}" ] || return 0                  # papel sem work_tools declarados → não corta comando
   while IFS= read -r -d '' _f; do
     [ -n "${_f}" ] || continue
-    _base_nome="$(basename "${_f}" .md)"
-    grep -qxF "${_base_nome}" <<< "${_tools}" || printf ':(exclude)%s\n' "${_f}"
+    _base_name="$(basename "${_f}" .md)"
+    grep -qxF "${_base_name}" <<< "${_tools}" || printf ':(exclude)%s\n' "${_f}"
   done < <(git -C "${_repo}" -c core.quotePath=false ls-tree -r -z --name-only HEAD -- .claude/commands/meta)
 }
 
@@ -199,8 +224,8 @@ _is_contract() {  # $1=path → 0 se o arquivo é contrato (viaja apesar do cort
 # (separador NUL), e `read -r -d ''` o consome. Hoje o repo tem 0 caminhos assim; a guarda é para o
 # dia em que tiver, e esse dia não avisa.
 _emit_role_excludes() {  # $1=REPO $2=papel
-  local _repo="$1" _papel="$2" _f _pre _cuts
-  _cuts="$(_role_cut "${_papel}")"
+  local _repo="$1" _role="$2" _f _pre _cuts
+  _cuts="$(_role_cut "${_role}")"
   [ -n "${_cuts}" ] || return 0
   while IFS= read -r -d '' _f; do
     [ -n "${_f}" ] || continue
@@ -225,10 +250,33 @@ _emit_role_excludes() {  # $1=REPO $2=papel
 #   inteira, e a assimetria é o lado seguro dos dois modos.
 # `--role/manifest`  = a superfície declarada ∩ HEAD (o transporte real; `git archive` aborta com
 #   pathspec que não casa nada). Sem git, FALHA ALTO — transporte que não sabe o que existe não copia.
+# ── A VARREDURA COBRE ALÉM DO TRANSPORTE — e o `plugins/` é o motivo ─────────────────────────
+# Medido 2026-09-16, por refutador adversarial: `plugins/` NÃO era raiz de varredura, e é o transporte
+# MAIS PÚBLICO que existe nesta casa (o marketplace publica aquele diretório para qualquer um). O
+# conteúdo estava limpo na medição — e essa é exatamente a frase perigosa: limpo era o CONTEÚDO, não
+# a COBERTURA. É a tese do cabeçalho deste arquivo aplicada a si mesmo, "guarda que varre menos do que
+# o transporte emite é fail-open com cara de cobertura", um andar acima: `plugins/` não estava nem no
+# transporte que esta SSOT descreve, então nenhuma guarda o olhava.
+#
+# ⚠️ POR QUE ISTO É UMA LISTA SEPARADA, e não uma entrada em `_base`: `_base` é o MANIFESTO — o que
+# `git archive` copia para o adotante. Um `plugins` ali faria o plugin montado VIAJAR dentro do bundle,
+# que é outra coisa e está errada. A assimetria é o desenho declarado dez linhas acima: varrer mais do
+# que viaja nunca é fail-open; varrer menos é. Portanto o extra só sai no modo `scrub`.
+_SCRUB_EXTRA=(plugins)
+
 if [ "${MODE}" = "scrub" ]; then
-  printf '%s\n' "${_base[@]}"
+  printf '%s\n' "${_base[@]}" "${_SCRUB_EXTRA[@]}"
   exit 0
 fi
+
+# ── EXCLUSÃO UNIVERSAL: chave de membro nunca viaja, em NENHUM papel ─────────────────────────
+# Não é corte de papel — é fronteira de identidade. `jwks/<membro>-N.pem` é chave PÚBLICA (não há
+# segredo a proteger), mas o NOME DO ARQUIVO é o nome do cliente, e ele viajava para todo adotante
+# e para a porta pública. Medido 2026-09-17 na 1ª materialização real: duas chaves no bundle,
+# salvas de subir só por um `.gitignore` do destino — acidente, não desenho.
+# Fica fora do `_role_cut` de propósito: o corte por papel é sobre QUANTA fábrica o alvo recebe;
+# este é sobre QUEM o bundle nomeia, e a resposta é a mesma nos três papéis.
+_IDENTITY_EXCLUDES=(':(exclude).claude/utils/federation-transport/jwks/*.pem')
 
 if [ "${MODE}" = "manifest" ]; then
   git -C "${REPO}" rev-parse HEAD >/dev/null 2>&1 || {
@@ -239,6 +287,9 @@ if [ "${MODE}" = "manifest" ]; then
   done
   while IFS= read -r local_p; do [ -n "${local_p}" ] && _spec+=("${local_p}"); done < <(_emit_role_excludes "${REPO}" "${ROLE}")
   while IFS= read -r local_p; do [ -n "${local_p}" ] && _spec+=("${local_p}"); done < <(_emit_command_excludes "${REPO}" "${ROLE}")
+  # A exclusão de IDENTIDADE vale nos três papéis: quem o bundle NOMEIA não é assunto de quanta
+  # fábrica ele leva. Mas a POSIÇÃO dela não é estética — ela entra DEPOIS da guarda de
+  # precondição abaixo, e a razão é um fail-open que a bancada pegou em 2026-09-17.
 
   # ⚠️ FAIL-LOUD CONTRA O BUNDLE VAZIO SILENCIOSO — medido 2026-09-15: `git archive` devolve rc=0
   # com tar de ZERO arquivos quando os `:(exclude)` cancelam tudo. Quem consome este manifesto lê o
@@ -248,15 +299,28 @@ if [ "${MODE}" = "manifest" ]; then
   # (caso (e), 2026-09-15). Um repo sem nenhuma raiz da superfície emitia manifesto VAZIO com rc=0;
   # pior, a contagem abaixo roda `diff-tree -- ` sem pathspec, que casa o REPOSITÓRIO INTEIRO — a
   # guarda nova aprovaria a si mesma. Manifesto vazio é falha de precondição, nunca "nada a copiar".
-  if [ "${#_spec[@]}" -eq 0 ]; then
+  # ⚠️ CONTA SÓ O QUE É POSITIVO — e esta linha é a cura de um fail-open MEDIDO. A forma anterior
+  # testava `${#_spec[@]}` depois de já ter apendado `_IDENTITY_EXCLUDES`, então o array NUNCA era
+  # vazio e esta guarda estava MORTA. Pior: a segunda guarda (`_n_sobrou`) também caía, porque um
+  # spec composto SÓ de `:(exclude)` casa TUDO MENOS aquilo — num repo alheio o manifesto saía
+  # rc=0 mandando copiar o repositório inteiro, biografia e segredos junto, exatamente o desastre
+  # que o comentário acima descreve. Quem achou foi a bancada (role-cut (e2)), não uma leitura.
+  # A lição é de forma, não de lógica: guarda de PRECONDIÇÃO tem de rodar antes de qualquer coisa
+  # que engorde o que ela mede — [[bancada-espelha-o-runner]] um andar acima.
+  _n_pos=0; for local_p in "${_spec[@]:-}"; do case "${local_p}" in ':('*) : ;; '') : ;; *) _n_pos=$((_n_pos+1)) ;; esac; done
+  if [ "${_n_pos}" -eq 0 ]; then
     echo "ERRO: manifesto VAZIO para '${REPO}' — nenhuma raiz da superfície Onion existe em HEAD. Pathspec ausente significa TODOS para o git: seguir daqui copiaria o repositório inteiro." >&2
     exit 3
   fi
 
+  # Só AGORA a exclusão de identidade entra: ela subtrai superfície, e subtrair de um conjunto
+  # vazio de positivos é o que produzia o "copia tudo".
+  _spec+=("${_IDENTITY_EXCLUDES[@]}")
+
   # `git ls-tree` recusa magia de pathspec; `git diff-tree` (comando de diff) a aceita — contra a
   # ÁRVORE VAZIA ele lista exatamente os arquivos que o `git archive` copiaria.
-  _ARVORE_VAZIA=4b825dc642cb6eb9a060e54bf8d69288fbee4904
-  _sobrou="$(git -C "${REPO}" diff-tree -r --name-only --no-commit-id "${_ARVORE_VAZIA}" HEAD -- "${_spec[@]}")"
+  _EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+  _sobrou="$(git -C "${REPO}" diff-tree -r --name-only --no-commit-id "${_EMPTY_TREE}" HEAD -- "${_spec[@]}")"
   _n_sobrou="$(printf '%s' "${_sobrou}" | grep -c . || true)"
   if [ "${_n_sobrou}" -eq 0 ]; then
     echo "ERRO: o manifesto do papel '${ROLE}' não casa arquivo NENHUM em HEAD — o bundle nasceria vazio e o 'git archive' sairia 0 (silencioso). Confira _role_cut/_ROLE_CONTRACT." >&2
@@ -294,7 +358,11 @@ fi
 # A cura correta é EMITIR STUB — o baseline do adotante nasce do corpus DELE (regen-baselines.sh
 # --ensure-from já faz isso); o passivo do core não é dívida do cliente.
 [ -d "${BUNDLE}" ] || { echo "ERRO: ${MODE} exige diretório existente: '${BUNDLE}'" >&2; exit 2; }
-_priv='docs/(discussions|analysis|materials|applying)/|onion-pessoal-marcio'
+# ⚠️ O padrão anterior fixava UM nome completo do vertical pessoal, e era ESTREITO DEMAIS (medido
+# 2026-09-16, refutador adversarial): a família tem mais de um repo, e o irmão passava batido —
+# inclusive para dentro do plugin PÚBLICO. Guarda por lista falha pelo VOCABULÁRIO, não pela lógica;
+# o PREFIXO cobre a família inteira, inclusive o repo que ninguém criou ainda.
+_priv='docs/(discussions|analysis|materials|applying)/|onion-pessoal'
 
 # --stub-baselines: a CURA, aplicada na EMISSÃO e não no destino. O cabeçalho é o MESMO que o
 # `regen-baselines.sh --ensure-from` semeia, de propósito: os dois mecanismos têm de concordar sobre
@@ -309,6 +377,34 @@ if [ "${MODE}" = "stub" ]; then
   done
   echo "stub aplicado em ${_n} baseline(s) — o passivo do core não viaja como dívida do cliente"
   exit 0
+fi
+
+# ── (c) ARQUIVO NOMEADO POR MEMBRO — a forma que quase passou, e passou por SORTE ─────────────
+# Medido 2026-09-17, na PRIMEIRA materialização real da porta pública: o bundle carregava
+#   .claude/utils/federation-transport/jwks/<membro>-1.pem   (duas, nomeando dois adotantes)
+# Não são segredo — chave PÚBLICA de JWKS —, mas o NOME DO ARQUIVO é o nome do cliente, e ele viaja
+# num repo público. Não subiram só porque o alvo tinha um `jwks/.gitignore` com `*.pem`; sem esse
+# acidente, teriam. Guarda que depende do .gitignore do DESTINO não é guarda.
+# A derivação é do `members.yaml` (mesma fonte da REGRA 36), e ela é FAIL-OPEN por desenho: sem o
+# registro não há o que derivar, e o silêncio é declarado — porque um bundle montado fora do core
+# legitimamente não tem o registro à mão.
+_members="${REPO}/docs/evolution/federation/members.yaml"
+if [ -f "${_members}" ]; then
+  _named=""
+  while IFS= read -r _id; do
+    [ -n "${_id}" ] || continue
+    case "${_id}" in onion-*|marcio*|"") continue ;; esac   # prefixo da própria casa não é cliente
+    while IFS= read -r _f; do
+      [ -n "${_f}" ] && _named="${_named}${_f#"${BUNDLE}/"} (nomeia '${_id}')
+"
+    done < <(find "${BUNDLE}" -type f -name "*${_id}*" -not -path '*/.git/*' 2>/dev/null)
+  done < <(grep -E '^\s+- id:' "${_members}" | sed 's/.*- id:[[:space:]]*//' | tr -d '"' | tr -d "'")
+  if [ -n "${_named}" ]; then
+    echo "✗ bundle carrega arquivo NOMEADO POR MEMBRO do registro (o nome do cliente viaja no nome do arquivo):" >&2
+    printf '%s' "${_named}" | sed 's|^|  |' >&2
+    echo "  Remova do transporte (o manifesto não deve levá-los) ou renomeie sem o id do membro." >&2
+    exit 1
+  fi
 fi
 
 _hits=""
