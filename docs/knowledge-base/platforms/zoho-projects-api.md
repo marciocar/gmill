@@ -370,7 +370,7 @@ Campos principais do **Create Task** [1]:
 
 ## 🔗 Integração com o Sistema Onion
 
-- **Não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
+- **Ainda não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
   asana | linear | none` (ver [task-manager-abstraction](../concepts/task-manager-abstraction.md)).
   Operar tasks do Zoho via `/product:task` exigiria um **adapter novo** em
   `.claude/utils/task-manager/adapters/`, caminho de `/meta:create-abstraction` + sinal upstream ao core.
@@ -401,4 +401,4 @@ Campos principais do **Create Task** [1]:
 
 ---
 
-*Pesquisado e gerado em 2026-09-30 (v1.1 no mesmo dia: tarefas + automação) via `/meta:create-knowledge-base`. Nenhuma chamada real à API foi feita: os exemplos seguem a doc oficial e não foram executados contra um portal.*
+*Pesquisado e gerado em 2026-09-30 (no mesmo dia: v1.1 tarefas + automação; v1.2 cobertura completa para o adapter, conferida contra a doc oficial baixada) via `/meta:create-knowledge-base`. Nenhuma chamada real à API foi feita: os exemplos seguem a doc oficial e não foram executados contra um portal.*
