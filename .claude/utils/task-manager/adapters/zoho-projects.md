@@ -254,9 +254,10 @@ class ZohoClient {
       let json: any;
       try {
         json = await this.call('GET', `${path}?${qs}`);
-      } catch (e) {
-        // N5: sem page_info, a página além do fim pode vir como erro → fica com o que já leu
-        if (page > 1 && !sawPageInfo) return out.slice(0, max);
+      } catch (e: any) {
+        // N5: sem page_info, a página além do fim pode vir como 400/404 → fica com o que já leu.
+        // R2: SÓ 400/404. Auth (401), rate limit (429) e 5xx PROPAGAM — não viram lista truncada.
+        if (page > 1 && !sawPageInfo && (e?.status === 400 || e?.status === 404)) return out.slice(0, max);
         throw e;
       }
       if (json?.page_info) sawPageInfo = true;
@@ -318,12 +319,13 @@ function safeJson(text: string): any {
     }
     if (c === '"') { inStr = true; out += c; continue; }
     if (c === '-' || (c >= '0' && c <= '9')) {
-      let j = i + (c === '-' ? 1 : 0);
-      while (j < text.length && text[j] >= '0' && text[j] <= '9') j++;
-      const isInt = !/[.eE]/.test(text[j] ?? '');
-      const digits = j - i - (c === '-' ? 1 : 0);
-      out += isInt && digits >= 16 ? `"${text.slice(i, j)}"` : text.slice(i, j);
-      i = j - 1;
+      // R1: consome o número INTEIRO (sinal, inteiro, fração, expoente) antes de decidir —
+      // senão os dígitos da fração de 0.30000000000000004 viravam um "inteiro longo" citado.
+      const m = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i));
+      const lit = m ? m[0] : c;
+      const isLongInt = !m?.[1] && !m?.[2] && lit.replace('-', '').length >= 16;
+      out += isLongInt ? `"${lit}"` : lit;
+      i += lit.length - 1;
       continue;
     }
     out += c;
@@ -390,7 +392,8 @@ class ZohoProjectsAdapter implements ITaskManager {
       return true;
     } catch (e: any) {
       // só "não existe" vira false; auth, rate limit e rede PROPAGAM (não são "deleção negada")
-      if (e?.status === 404 || e?.code === 6404 || e?.title === 'RESOURCE_NOT_FOUND') return false;
+      // R3: só "recurso não encontrado" (code 6404); 404 de rota/portal errado PROPAGA
+      if (e?.code === 6404 || e?.title === 'RESOURCE_NOT_FOUND') return false;
       throw e;
     }
   }
@@ -608,6 +611,7 @@ class ZohoProjectsAdapter implements ITaskManager {
   /**
    * Lista de status do portal, com cache por sessão. S7: guarda a PROMESSA (chamadas concorrentes
    * compartilham um fetch). N3: promessa REJEITADA sai do cache (um 429 não inutiliza a sessão).
+   * R4 (aceito): quem chamou no MESMO tick compartilha a falha; a próxima chamada tenta de novo.
    */
   private loadStatuses(): Promise<Array<{ id: string; name: string }>> {
     this.statusCache ??= this.client
