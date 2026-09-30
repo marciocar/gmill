@@ -258,9 +258,16 @@ _family() {
   if [ -n "${SELFTEST_QUEUE:-}" ] && [ "${name}" != "fixtures" ]; then
     mkdir "${SELFTEST_QUEUE}/claimed/${name}" 2>/dev/null || return 0
   fi
-  if [ "${SELFTEST_ROLE}" = "adopted" ]; then
+  # PREDICADO: "não é o core", não "é adopted". A forma antiga era CEGA para `hub` e `standalone`,
+  # que também CONSOMEM o framework sem autorá-lo. Medido por dogfood em 2026-09-30, atualizando um
+  # hub real: ele rodou as 19 famílias core-only e a `radar_staleness` reprovou 7 casos com
+  # "arquivo inexistente: docs/onion/radar-baselines.yaml" — SSOT que só o core tem, cobrada de quem
+  # nunca a teve. É a mesma classe do passivo de baseline que o `regen-baselines.sh` filtra: papel
+  # lido por igualdade a UM valor envelhece no primeiro papel novo (guarda de lista falha pelo
+  # VOCABULÁRIO). Papéis hoje: source (autor) · adopted · hub · standalone (consumidores).
+  if [ "${SELFTEST_ROLE:-source}" != "source" ]; then
     case ",${SELFTEST_CORE_ONLY_FAMILIES}," in *",${name},"*)
-      record_skip "${name}: core-only (role: adopted — testa SSOT/maquinaria que só o core tem)"
+      record_skip "${name}: core-only (role: ${SELFTEST_ROLE} — testa SSOT/maquinaria que só o core tem)"
       if [ -n "${SELFTEST_QUEUE:-}" ] && [ "${name}" != "fixtures" ]; then : > "${SELFTEST_QUEUE}/done/${name}"; fi
       return 0 ;;
     esac
@@ -293,6 +300,12 @@ for ln in L:
     if cur and ln.startswith("}"): cur = None; continue
     if not cur: continue
     for p in re.findall(r"(?:\$\{?REPO_ROOT\}?|\$\{?SCRIPT_DIR\}?)/((?:\.claude|ops|docs|plugins|\.githooks|\.github)/[A-Za-z0-9_./-]+)", ln): fams[cur].add(p)
+    # ARQUIVO DE RAIZ (2026-09-30): a lista de prefixos acima não alcança `CLAUDE.md`, `.env.example`
+    # nem `README.md`, e isso NÃO cai no failsafe: o failsafe só vale quando o conjunto da família
+    # fica VAZIO (imprime `*`). Uma família com SUT na raiz + qualquer SUT sob .claude/ tem conjunto
+    # não-vazio e, por isso, deixaria de rodar num commit que toca SÓ o arquivo de raiz — fail-open.
+    # Achado por passada adversarial na família do adapter Zoho, cujo SUT inclui `.env.example`.
+    for p in re.findall(r"(?:\$\{?REPO_ROOT\}?)/(CLAUDE\.md|\.env\.example|README\.md)", ln): fams[cur].add(p)
     for p in re.findall(r"\$\{?SCRIPT_DIR\}?/([A-Za-z0-9_.-]+\.sh)", ln): fams[cur].add(".claude/validation/" + p)
     if re.search(r"\brun_(lint|fix)_fixture\b|\$\{?LINT\}?\b", ln): fams[cur].add(".claude/validation/lint-artifacts.sh")
     if re.search(r"\brun_kg_fixture\b", ln): fams[cur].add(".claude/validation/kg-radar.sh")
@@ -616,10 +629,15 @@ _emit() { printf '%s\n' "$1" 2>/dev/null || true; }
 # Modo lint — injeta a fixture no sandbox e assere por path
 # ---------------------------------------------------------------------------
 run_lint_fixture() {
-  local fixture="$1" target="$2" verdict="$3" keyword="$4"
+  local fixture="$1" target="$2" verdict="$3" keyword="$4" inject="${5:-}"
   local src="${FIX_DIR}/${fixture}"
   local dst_dir="${SANDBOX}/${target}"
-  local dst="${dst_dir}/${INJECT_NAME}"
+  # nome de injecao POR LINHA (6a coluna); vazio = o nome historico `.md`. A ancora de citacao
+  # acompanha: com nome custom ela e o nome INTEIRO (o lint imprime o path), senao segue o
+  # `INJECT_BASE` sem extensao, que e como as 110 linhas antigas casam.
+  local iname="${inject:-${INJECT_NAME}}"
+  local ianchor="${INJECT_BASE}"; [ -n "${inject}" ] && ianchor="${inject}"
+  local dst="${dst_dir}/${iname}"
 
   if [ ! -f "${src}" ]; then
     record_fail "${fixture}" "fixture inexistente: ${src}"
@@ -648,7 +666,7 @@ run_lint_fixture() {
 
   # Linhas de violação que citam o arquivo injetado (âncora-por-path)
   local cited
-  cited="$(printf '%s\n' "${out}" | grep -F "${INJECT_BASE}" || true)"
+  cited="$(printf '%s\n' "${out}" | grep -F "${ianchor}" || true)"
 
   case "${verdict}" in
     bad)
@@ -1732,6 +1750,42 @@ run_harness_inventory_selftests() {
     record_pass "harness-inventory: (f) (MUT) o lint ORIGINAL acusa o drift e o MUTADO CALA — a comparação de diff é o dente (mutante EXECUTADO, ${n_mut} sítios mutados)"
   else record_fail "harness-inventory: (f) (MUT)" "sítios mutados=${n_mut} (esperava >=2); original acusou=${hit_orig} (esperava >=1); mutante acusou=${hit_mut} (esperava 0) — a guarda não é load-bearing OU a âncora caducou"; fi
   rm -rf "${mut}" "${sb2}"
+
+  # ── (z1)(z2) A GUARDA QUE GRITAVA CINCO VEZES E NÃO PARAVA NADA ────────────────────────────
+  # Medido 2026-09-27: o `_die` do `_tracked` vivia no ramo `else`, e `_tracked` é chamado SEMPRE
+  # dentro de `$( )`. `_die` num subshell mata o SUBSHELL, não o script — a mensagem "Recusa" saía
+  # CINCO vezes no stderr, o `grep -c .` devolvia 0, o `|| true` engolia o rc, e o inventário
+  # publicava CINCO contadores zerados com **rc=0**, declarando na própria tabela o `git ls-files`
+  # que produziu o zero. Guarda que declara recusar e não alcança o programa de onde é chamada.
+  # Origem: sinal de um adotante greenfield (2026-09-08) que commitou SSOT de superfície inexistente.
+  local _hi_sb _hi_out _hi_rc
+  # (z1) SEM índice git ⇒ recusa ANTES de contar
+  _hi_sb="$(mktemp -d)"; git -C "${REPO_ROOT}" archive HEAD | tar -x -C "${_hi_sb}" 2>/dev/null
+  cp "${gen}" "${_hi_sb}/.claude/validation/" 2>/dev/null
+  if _hi_out="$( cd "${_hi_sb}" && bash .claude/validation/harness-inventory.sh 2>&1 )"; then _hi_rc=0; else _hi_rc=$?; fi
+  # ⚠️ A asserção passa pelo mesmo escrutínio do SUT: a 1ª redação tinha uma 3ª condição
+  #    ("nenhuma linha de tabela com **0**") que é REDUNDANTE — ele aborta antes de imprimir
+  #    tabela alguma — e ela reprovou um SUT correto. Asserção errada parece defeito ([[mutant-anchor-is-a-defect-candidate]]).
+  #    E o padrão é À PROVA DE LOCALE: a bancada roda sob `LC_ALL=C`, onde `í` são DOIS bytes e
+  #    `sem .ndice` (um curinga) NÃO casa. Casar só o trecho ASCII é o que sobrevive aos dois
+  #    locales ([[bancada-mede-no-locale-do-hook]]).
+  if [ "${_hi_rc}" -ne 0 ] && grep -qiE 'ndice git' <<< "${_hi_out}"; then
+    record_pass "harness-inventory: (z1) sem índice git ⇒ recusa ANTES de contar (nenhuma tabela zerada)"
+  else record_fail "harness-inventory: (z1) zero virou resultado" "rc=${_hi_rc} out=${_hi_out:0:220}"; fi
+  rm -rf "${_hi_sb}"
+
+  # (z2) git PRESENTE mas tudo UNTRACKED ⇒ CONTRADIÇÃO nomeada. É o cenário exato do adotante:
+  #      arquivo em disco + contagem rastreada zero = projeção afirmaria superfície que não existe.
+  _hi_sb="$(mktemp -d)"; git -C "${REPO_ROOT}" archive HEAD | tar -x -C "${_hi_sb}" 2>/dev/null
+  cp "${gen}" "${_hi_sb}/.claude/validation/" 2>/dev/null
+  git -C "${_hi_sb}" init -q 2>/dev/null
+  git -C "${_hi_sb}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m vazio 2>/dev/null || true
+  if _hi_out="$( cd "${_hi_sb}" && bash .claude/validation/harness-inventory.sh 2>&1 )"; then _hi_rc=0; else _hi_rc=$?; fi
+  if [ "${_hi_rc}" -ne 0 ] && grep -qiE 'CONTRADI' <<< "${_hi_out}"; then
+    record_pass "harness-inventory: (z2) tudo untracked ⇒ CONTRADIÇÃO nomeada (o sinal do greenfield)"
+  else record_fail "harness-inventory: (z2) publicaria superfície inexistente" "rc=${_hi_rc} out=${_hi_out:0:220}"; fi
+  rm -rf "${_hi_sb}"
+
 }
 
 # Modo rules-registry — REGRA 39. O gerador projeta os docstrings '# REGRA N — …' de
@@ -1792,10 +1846,22 @@ run_rules_registry_selftests() {
   # (f) GUARD verde no estado real (--only escopa ao doc)
   # (2026-09-03) era `bash lint | grep -q 'OK ✓'`: o grep -q fecha o pipe no 1º match, o lint leva SIGPIPE e,
   # sob pipefail, o `if` vê falha — corrida que só aparecia com a bancada em paralelo (2 runs de 8 workers, 2×).
+  # (2026-09-23) era `grep -q 'OK ✓'`, e isso media o REPO INTEIRO, nao a REGRA 39: o `--only` nao e
+  # honrado por toda guarda (door-staleness, por exemplo, julga sempre), entao qualquer HARD alheio
+  # derrubava este caso com a mensagem "REGRA 39 acusou o estado real" — acusacao FALSA, e foi
+  # exatamente o que aconteceu: reprovou por a porta publica estar 4 commits defasada. Guarda que
+  # declara menos do que mede e a classe que esta casa persegue; o caso agora mede o que nomeia.
   local f_out; f_out="$(bash "${lint}" --only="${doc}" 2>&1 || true)"
-  if grep -q 'OK ✓' <<< "${f_out}"; then
+  # PROVA POSITIVA DE TERMINO ANTES da asserção negativa (refutador independente, 2026-09-24): minha
+  # 1a cura trocou `grep -q 'OK ✓'` por uma asserção só NEGATIVA, e lint MORTO nao imprime VIOLATION
+  # nenhuma — logo a morte era lida como "REGRA 39 verde". Ironia medida: foi esta mesma leva que
+  # criou o rotulo MORREU para que morte silenciosa deixasse de passar por veredito. O sinal estava
+  # DENTRO da variavel que o caso captura; faltava olhar.
+  if ! grep -q '=== Sumário ===' <<< "${f_out}" || grep -q '^MORREU' <<< "${f_out}"; then
+    record_skip "rules-registry: (f) o lint nao chegou ao sumario (morreu antes) — NAO PUDE julgar a REGRA 39"
+  elif ! grep -qE 'VIOLATION: .*lint-rules\.md: .*(registro desatualizado|registro ausente|gerador do registro)' <<< "${f_out}"; then
     record_pass "rules-registry: (f) REGRA 39 verde no estado real (--only lint-rules.md)"
-  else record_fail "rules-registry: (f)" "REGRA 39 acusou o estado real (deveria estar em paridade)"; fi
+  else record_fail "rules-registry: (f)" "REGRA 39 acusou o estado real (deveria estar em paridade): $(grep -m1 'lint-rules.md' <<< "${f_out}")"; fi
 }
 
 # Modo onion-version-tracked — REGRA 40. Um adotante (role: adopted) TEM que trackear o .onion-version;
@@ -5000,6 +5066,44 @@ run_research_lens_selftests() {
   rc=0; ONION_KG_CORPUS_FILES= ONION_KG_CORPUS_ROOT="${d}/vazio" bash "${cg}" x >/dev/null 2>&1 || rc=$?
   [ "${rc}" = 2 ] && record_pass "research-lens: (h) corpus vazio ⇒ exit 2 (fail-loud, nunca '0 achados')" \
     || record_fail "research-lens: (h)" "esperava exit 2, veio ${rc}"
+
+  # ── (h2)(h3) A SEÇÃO `edges:` NÃO PERTENCE A NENHUM NÓ ────────────────────────────────────
+  # Bug reportado pelo adotante `sge` em 2026-09-24 e reproduzido aqui: o parser abria um nó em
+  # `- id:` e engolia todo `label:` seguinte — inclusive os das ARESTAS, que também têm
+  # `- from:`/`label:`. O ÚLTIMO nó de `nodes:` herdava o label de cada aresta e ficava com o da
+  # última; e qualquer termo presente no label de QUALQUER aresta marcava `_hit` nele.
+  # ⚠️ O BUG ESTAVA ATIVO NO CORPUS DO CORE — e a frase que estava aqui antes dizia o contrário.
+  # Eu escrevi "o corpus vivo não expõe isso: antes e depois dão saída IDÊNTICA" depois de sondar
+  # com 3 termos, e mantive a frase depois de sondar com 10. Uma passada adversarial derrubou as duas
+  # medições: `claude-code-2.1-onion-2026-08.kg.yaml` tem 4 arestas ROTULADAS, e o último nó dele
+  # (`D_REGENERAR_BASELINE_POR_DESCOBERTA_NAO_POR_LISTA`) exibia o label da última aresta em vez do
+  # próprio. Os meus termos não diferenciavam os dois labels — sondar no caminho errado é NÃO ter
+  # medido, e eu transformei isso numa afirmação escrita no código, que é como uma medição ruim vira
+  # doutrina. O caso de fixture abaixo continua sendo o jeito certo de PRENDER a regressão (não
+  # depende de o corpus ter ou não uma aresta rotulada hoje); o que mudou é só a verdade sobre o
+  # alcance. E quem apontou o defeito primeiro foi o adotante, num substrato diferente.
+  mkdir -p "${d}/g5"
+  printf 'meta:\n  id: g5\n  schema_version: "1"\n  baseline: 2026-09-24\n  review_after: %s\nnodes:\n  - id: N_PRIMEIRO\n    node_type: claim\n    plane: DEV\n    status: confirmed\n    impact: 2\n    confidence: 0.5\n    label: "o primeiro no, com rotulo proprio"\n  - id: N_ULTIMO\n    node_type: claim\n    plane: DEV\n    status: confirmed\n    impact: 2\n    confidence: 0.5\n    label: "o ultimo no, com rotulo proprio"\nedges:\n  - from: N_PRIMEIRO\n    to: N_ULTIMO\n    edge_type: SUPPORTS\n    label: "palavradearesta que nao pertence a nenhum no"\n' "${future}" > "${d}/g5/g5.kg.yaml"
+  out="$(ONION_KG_CORPUS_FILES="${d}/g5/g5.kg.yaml" bash "${cg}" palavradearesta 2>&1)"; rc=$?
+  if [ "${rc}" = 0 ] && ! grep -q "N_ULTIMO" <<< "${out}"; then
+    record_pass "research-lens: (h2) termo só em label de ARESTA ⇒ nenhum nó casa (sem falso positivo)"
+  else record_fail "research-lens: (h2) o último nó absorveu o label da aresta" "rc=${rc}: ${out:0:300}"; fi
+  out="$(ONION_KG_CORPUS_FILES="${d}/g5/g5.kg.yaml" bash "${cg}" ultimo 2>&1)"; rc=$?
+  if [ "${rc}" = 0 ] && grep -qF "o ultimo no, com rotulo proprio" <<< "${out}"&& ! grep -qF "palavradearesta" <<< "${out}"; then
+    record_pass "research-lens: (h3) o último nó exibe o label PRÓPRIO, não o da última aresta"
+  else record_fail "research-lens: (h3) label do último nó contaminado" "rc=${rc}: ${out:0:300}"; fi
+
+  # (h4) `edges:` ANINHADO — a 1ª cura fechava o nó em qualquer chave SEM indentação, o que trata
+  # indentação e não SEÇÃO: com `graph: / nodes: / edges:` aninhados o bug sobrevivia idêntico.
+  # Achado por passada adversarial. Fora do schema de hoje, mas a guarda não dizia que só valia ali —
+  # e promessa mais larga que a medição é a classe que esta leva inteira persegue.
+  mkdir -p "${d}/g6"
+  printf 'meta:\n  id: g6\n  schema_version: "1"\n  baseline: 2026-09-25\n  review_after: %s\ngraph:\n  nodes:\n    - id: N_UM\n      node_type: claim\n      plane: DEV\n      status: confirmed\n      impact: 2\n      confidence: 0.5\n      label: "rotulo do no um"\n    - id: N_DOIS\n      node_type: claim\n      plane: DEV\n      status: confirmed\n      impact: 2\n      confidence: 0.5\n      label: "rotulo do no dois"\n  edges:\n    - from: N_UM\n      to: N_DOIS\n      edge_type: SUPPORTS\n      label: "gamaaresta aninhada"\n' "${future}" > "${d}/g6/g6.kg.yaml"
+  out="$(ONION_KG_CORPUS_FILES="${d}/g6/g6.kg.yaml" bash "${cg}" gamaaresta 2>&1)"; rc=$?
+  local out2; out2="$(ONION_KG_CORPUS_FILES="${d}/g6/g6.kg.yaml" bash "${cg}" dois 2>&1)"
+  if [ "${rc}" = 0 ] && ! grep -q "N_DOIS" <<< "${out}"&& grep -qF "rotulo do no dois" <<< "${out2}"; then
+    record_pass "research-lens: (h4) \`edges:\` ANINHADO também não contamina o último nó"
+  else record_fail "research-lens: (h4) aninhamento escapa da cura" "rc=${rc} aresta=${out:0:200} proprio=${out2:0:200}"; fi
   # REGRA 69 — roster de fontes: last_checked vencido pela cadência ⇒ SOFT; fresco/sem last_checked ⇒ silêncio
   printf 'axes:\n  - id: ax1\n    cadence: weekly\n    sources:\n      - { url: "https://a.example/x", kind: primary, tier: 9, last_checked: "2026-01-01" }\n      - { url: "https://b.example/y", kind: primary, tier: 9, last_checked: "%s" }\n      - { url: "https://c.example/z", kind: forum, tier: 4 }\n' "$(date +%F)" > "${d}/roster.yaml"
   rc=0; out="$(ONION_RADAR_SOURCES="${d}/roster.yaml" ONION_RESEARCH_KG_DIR="${d}/nao-existe" bash "${lint}" --only=docs/onion/radar-baselines.yaml 2>&1)" || rc=$?
@@ -5186,6 +5290,35 @@ run_resolve_target_selftests() {
   if [ "$(bash "${helper}" todos 2>/dev/null | sha256sum)" = "$(bash "${helper}" todos 2>/dev/null | sha256sum)" ]; then
     record_pass "resolve-target: determinístico"
   else record_fail "resolve-target: determinismo" "varia entre execuções"; fi
+
+  # ── `todos` NÃO ENUMERA PAPÉIS: quem adota o core direto entra, qualquer que seja o papel ──
+  # Defeito medido 2026-09-25: o ramo `todos` era `tier hub` ∪ `tier standalone`, uma LISTA. A
+  # unificação de vocabulário de 2026-09-24 (`consumer`→`adopted`) criou um papel que a lista não
+  # conhecia, e `sge` — único membro `role: adopted` — saía de FORA de todo anúncio, sem gate nenhum
+  # acusar. A cura foi parar de enumerar e perguntar a tripla `adopts`.
+  # O caso prende a PROPRIEDADE, não o roster: todo membro que adota o core tem de estar em `todos`,
+  # e nenhum que adota outro pode estar. Assim ele sobrevive a membro novo e a papel novo.
+  local _tr _diretos _via_hub _fora
+  _tr="$(bash "${REPO_ROOT}/.claude/validation/graph.sh" --triples 2>/dev/null || true)"
+  local _core; _core="$(printf '%s\n' "${_tr}" | awk -F'\t' '$2=="adopts"{c[$3]++} END{m=0;for(k in c) if(c[k]>m){m=c[k];b=k}; if(b!="") print b}')"
+  if [ -z "${_core}" ]; then
+    record_skip "resolve-target: sem tripla \`adopts\` legível → paridade de papéis não medida"
+  else
+    _diretos="$(printf '%s\n' "${_tr}" | awk -F'\t' -v c="${_core}" '$2=="adopts" && $3==c{print $1}' | LC_ALL=C sort -u)"
+    _via_hub="$(printf '%s\n' "${_tr}" | awk -F'\t' -v c="${_core}" '$2=="adopts" && $3!=c{print $1}' | LC_ALL=C sort -u)"
+    _fora="$(comm -23 <(printf '%s\n' "${_diretos}") <(printf '%s\n' "${todos}"))"
+    if [ -z "${_fora// /}" ]; then
+      record_pass "resolve-target: todo adotante DIRETO do core está em \`todos\` (papel novo entra por construção)"
+    else
+      record_fail "resolve-target: adotante direto FORA de \`todos\`" "papel não enumerado ficou invisível ao anúncio: $(printf '%s' "${_fora}" | tr '\n' ' ')"
+    fi
+    local _intruso; _intruso="$(comm -12 <(printf '%s\n' "${_via_hub}") <(printf '%s\n' "${todos}"))"
+    if [ -z "${_intruso// /}" ]; then
+      record_pass "resolve-target: quem adota um HUB fica fora de \`todos\` (RFC-0003 §2.1 intacta)"
+    else
+      record_fail "resolve-target: T2 entrou em \`todos\`" "recebe do core em vez de pelo hub: $(printf '%s' "${_intruso}" | tr '\n' ' ')"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -9591,13 +9724,30 @@ case "$args" in
   *"pr view"*headRefOid*)          echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"; exit 0 ;;
   *"pr view"*headRepositoryOwner*) echo "owner/repo"; exit 0 ;;
   *"pr view"*headRefName*)         echo "feat/alguma-coisa"; exit 0 ;;
-  *"pr view"*statusCheckRollup*)   echo "SUCCESS"; exit 0 ;;
+  *"pr view"*statusCheckRollup*)
+      if [ -n "${GH_VERDICT_FAIL:-}" ]; then echo "FAILURE"; else echo "SUCCESS"; fi; exit 0 ;;
   *"pr view"*state,mergedAt*)
       n=$(cat "${STUB_N}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "${STUB_N}"
       if [ "$n" -eq 1 ]; then v="${GH_STATE_BEFORE}"; else v="${GH_STATE_AFTER}"; fi
       [ -n "$v" ] && echo "$v"; exit 0 ;;
-  *"api "*check-runs*)             printf 'selftest\tcompleted\tsuccess\n'; exit 0 ;;
-  *"pr checks"*)                   printf 'selftest\tpass\t1s\turl\n'; exit 0 ;;
+  *"pr comment"*)
+      # grava o CORPO do comentário — o esboço tem de ver o que o SUT de fato POSTA.
+      # Sem isto, "gh saiu 0" seria a única prova, e foi exatamente esse rc que mentiu no #874.
+      printf '%s' "${2-}" > /dev/null
+      body=""; prev=""
+      for a in "$@"; do [ "$prev" = "--body" ] && body="$a"; prev="$a"; done
+      printf '%s' "$body" > "${STUB_COMMENT}"
+      exit "${GH_COMMENT_RC:-0}" ;;
+  *"api "*check-runs*)
+      if [ -n "${GH_VERDICT_FAIL:-}" ]; then
+        printf 'onion-review-verdict\tcompleted\tfailure\n'
+      fi
+      printf 'selftest\tcompleted\tsuccess\n'; exit 0 ;;
+  *"pr checks"*)
+      if [ -n "${GH_VERDICT_FAIL:-}" ]; then
+        printf 'onion-review-verdict\tfail\t7s\turl\n'
+      fi
+      printf 'selftest\tpass\t1s\turl\n'; exit 0 ;;
   *"pr merge"*)                    printf '%s\n' "${GH_MERGE_OUT}"; exit "${GH_MERGE_RC}" ;;
 esac
 exit 0
@@ -9680,7 +9830,263 @@ STUB
   if [ "${_mv_rc}" -ne 0 ] && grep -q "NÃO CONSEGUI LER o estado do PR" <<< "${_mv_out}"; then
     record_pass "pr-merge-verified: (k) rc=0 com estado ilegível ⇒ die que DIZ que não leu"
   else record_fail "pr-merge-verified: (k)" "rc=${_mv_rc} out=${_mv_out}"; fi
-  unset -f _mv
+
+  # ── (l)(m)(n) O REGISTRO DA DISPENSA É CONTADO, NÃO PRESUMIDO ─────────────────────────
+  # Defeito medido no merge do PR #874 (2026-09-25): o corpo era montado com
+  # `printf '%s\n' \\` — DOIS contra-barras. O primeiro escapava o segundo, o `printf` recebia
+  # um contra-barra literal e a linha ACABAVA ali; as linhas seguintes viraram comando e o
+  # bash tentou executá-las (`## ⚠️ Merge com check DISPENSADO: command not found`).
+  # O `gh pr comment` postou `\`, saiu 0, o `die` não disparou, e o script imprimiu
+  # "✓ dispensa registrada" — para um registro que não registrava NADA. O próprio bloco se
+  # descreve como "PRECONDIÇÃO do merge, não cortesia"; ele declarava mais do que media.
+  # A bancada ATRAVESSA o `gh`: lê o corpo que o SUT postou, e não o rc de quem postou.
+  _mvd() { # $1=before $2=after $3=merge_rc $4=merge_out ; resto = flags do SUT
+    local b="$1" a="$2" mr="$3" mo="$4"; shift 4
+    echo 0 > "${d}/n"; : > "${d}/comment"
+    _mv_out="$(PATH="${d}:${PATH}" STUB_N="${d}/n" STUB_COMMENT="${d}/comment" \
+               GH_STATE_BEFORE="$b" GH_STATE_AFTER="$a" GH_VERDICT_FAIL=1 \
+               GH_MERGE_RC="$mr" GH_MERGE_OUT="$mo" bash "${sut}" 999 "$@" 2>&1)"
+    _mv_rc=$?
+  }
+  local _reason="saldo da conta de API zerado — HTTP 400 no pré-voo"
+  M="MERGED|$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # (l) o corpo postado carrega o cabeçalho, o NOME do check e o MOTIVO — os três.
+  _mvd "OPEN|null" "${M}" 0 "merged" --dispensa onion-review-verdict --motivo "${_reason}"
+  if [ "${_mv_rc}" -eq 0 ] \
+     && grep -qF "Merge com check DISPENSADO" "${d}/comment" \
+     && grep -qF "onion-review-verdict" "${d}/comment" \
+     && grep -qF "${_reason}" "${d}/comment"; then
+    record_pass "pr-merge-verified: (l) dispensa ⇒ o corpo POSTADO traz cabeçalho+check+motivo"
+  else
+    record_fail "pr-merge-verified: (l) registro vazio (o defeito do #874)" \
+      "rc=${_mv_rc} corpo=[$(cat "${d}/comment")] out=${_mv_out}"
+  fi
+
+  # (m) MUTANTE: com o corpo mutilado (o bug exato), o SUT tem de MORRER antes de postar.
+  #     Sem este caso, (l) sozinho não prova que a guarda existe — provaria só que o printf
+  #     voltou a funcionar, e o printf já "funcionava" (saía 0) enquanto postava `\`.
+  local _mut="${d}/sut-mutante.sh"
+  # O mutante RE-INTRODUZ o bug exato: acrescenta UM contra-barra à linha do `printf`, virando
+  # `\` em `\\`. Ancorado por `index()` (string literal, ZERO escape de regex) — a 1ª versão
+  # usava `sed` com cinco níveis de escape e não casava nada, e mutante que não muta declara
+  # verde sem medir: a própria classe de defeito que esta família persegue.
+  awk 'index($0,"_reg=\"$(printf")>0 { print $0 "\\"; next } { print }' "${sut}" > "${_mut}"
+  if ! cmp -s "${sut}" "${_mut}"; then
+    echo 0 > "${d}/n"; : > "${d}/comment"
+    _mv_out="$(PATH="${d}:${PATH}" STUB_N="${d}/n" STUB_COMMENT="${d}/comment" \
+               GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" GH_VERDICT_FAIL=1 \
+               GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${_mut}" 999 \
+               --dispensa onion-review-verdict --motivo "${_reason}" 2>&1)"; _mv_rc=$?
+    if [ "${_mv_rc}" -ne 0 ] && grep -q "INCOMPLETO" <<< "${_mv_out}"; then
+      record_pass "pr-merge-verified: (m) mutante (corpo mutilado) ⇒ die ANTES de postar"
+    else
+      record_fail "pr-merge-verified: (m) o mutante SOBREVIVEU — a guarda não conta o corpo" \
+        "rc=${_mv_rc} corpo=[$(cat "${d}/comment")] out=${_mv_out}"
+    fi
+  else
+    record_fail "pr-merge-verified: (m) âncora do mutante não casou" \
+      "o sed não alterou o SUT — a linha do printf mudou de forma; reancore o mutante"
+  fi
+
+  # (n) a guarda NÃO é fail-open pelo rc do gh: corpo bom, mas o POST falhando ⇒ die.
+  #     (a direção que já existia; o caso a fixa para que a cura de (m) não a apague)
+  echo 0 > "${d}/n"; : > "${d}/comment"
+  _mv_out="$(PATH="${d}:${PATH}" STUB_N="${d}/n" STUB_COMMENT="${d}/comment" \
+             GH_STATE_BEFORE="OPEN|null" GH_STATE_AFTER="${M}" GH_VERDICT_FAIL=1 GH_COMMENT_RC=1 \
+             GH_MERGE_RC=0 GH_MERGE_OUT=merged bash "${sut}" 999 \
+             --dispensa onion-review-verdict --motivo "${_reason}" 2>&1)"; _mv_rc=$?
+  if [ "${_mv_rc}" -ne 0 ] && grep -q "não consegui REGISTRAR a dispensa" <<< "${_mv_out}"; then
+    record_pass "pr-merge-verified: (n) post do registro falhando ⇒ die (precondição intacta)"
+  else record_fail "pr-merge-verified: (n)" "rc=${_mv_rc} out=${_mv_out}"; fi
+
+  unset -f _mv _mvd
+}
+
+# ═══ REGRA 90 — paridade papel: o SCRIPT aceita, a PROSA menciona ═════════════════════════
+# POR QUE EXISTE: a classe desencontrou DUAS vezes em sentidos opostos (2026-09-17 script estreito +
+# prosa larga; 2026-09-25 script largo + prosa estreita, reportado por um adotante `hub`). O POR QUE
+# completo vive no `command-role-parity-check.sh`.
+# ⚠️ A INVOCAÇÃO AQUI ESPELHA A DA PRODUÇÃO — `bash "${sc}" "<root>"` — porque é isso que a REGRA 59
+# (Modo que a produção consome é exercitado pela bancada) cobra, e porque um harness que chama o SUT
+# de um jeito que ninguém usa mede um programa diferente ([[bancada-espelha-o-runner]]).
+# ═══ onion-review.yml — a CAUSA do pré-voo classificada por faixa (frente sem bancada) ════
+# POR QUE EXISTE: a passada adversarial de 2026-09-25 mediu `grep -c "preflight_causa\|PF_CAUSA" = 0`
+# — a frente que carrega a atribuição de causa e a anotação do check era a ÚNICA do diff sem o
+# "contar, não presumir" que ele aplica às irmãs. E o defeito estava lá: o rótulo dizia "falha da
+# CREDENCIAL" para `HTTP 000` (timeout/DNS) e `529` (capacidade), num diff cuja tese é que saldo e
+# credencial são problemas diferentes com ações diferentes.
+# ⚠️ O SUT é shell EMBUTIDO em YAML. O caso EXTRAI o bloco do próprio workflow (não uma cópia
+# reescrita aqui) e o executa — cópia paralela é o modo-de-falha clássico: ela continua passando
+# depois de o workflow mudar ([[bancada-espelha-o-runner]]).
+run_review_cause_bands_selftests() {
+  local wf="${REPO_ROOT}/.github/workflows/onion-review.yml"
+  if [ ! -f "${wf}" ]; then record_skip "review-cause-bands: workflow ausente (adotante) → pulado"; return; fi
+  if ! grep -q '_causa_txt=""' "${wf}"; then
+    record_fail "review-cause-bands" "bloco \`_causa_txt\` não encontrado em ${wf} — a frente perdeu a classificação de causa, ou o âncora mudou"
+    return
+  fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  # Extrai do `_causa_txt=""` até o `fi` que fecha o bloco, tirando a indentação do YAML.
+  awk '/_causa_txt=""/{f=1} f{print} f&&/^          fi$/{exit}' "${wf}" \
+    | sed 's/^          //' > "${d}/bands.sh"
+  if ! bash -n "${d}/bands.sh" 2>/dev/null; then
+    record_fail "review-cause-bands" "o bloco extraído não é shell válido — a extração ou o bloco quebrou"
+    return
+  fi
+  _band() { # $1=http $2=corpo ; devolve _band_txt
+    _band_txt="$(PF_HTTP="$1" PF_CAUSA="$2" bash -c 'set -u; source "$0"; printf "%s" "${_causa_txt}"' "${d}/bands.sh" 2>&1)"
+  }
+  local _band_txt
+  _band 400 '{"error":{"message":"Your credit balance is too low to access the Anthropic API"}}'
+  if grep -qF "SALDO" <<< "${_band_txt}"&& ! grep -qiF "credencial foi recusada" <<< "${_band_txt}"; then
+    record_pass "review-cause-bands: 400 + 'credit balance' ⇒ SALDO (ação: repor crédito)"
+  else record_fail "review-cause-bands: saldo" "txt=${_band_txt}"; fi
+
+  _band 000 ''
+  if grep -qF "NÃO OBTEVE RESPOSTA" <<< "${_band_txt}"&& grep -qF "não credencial" <<< "${_band_txt}"; then
+    record_pass "review-cause-bands: 000 ⇒ rede/DNS/timeout, e DIZ que não é credencial"
+  else record_fail "review-cause-bands: 000 rotulado como credencial" "txt=${_band_txt}"; fi
+
+  _band 529 '{"type":"overloaded_error"}'
+  if grep -qF "CAPACIDADE" <<< "${_band_txt}"; then
+    record_pass "review-cause-bands: 529 ⇒ capacidade da API (nada a consertar aqui)"
+  else record_fail "review-cause-bands: 529 rotulado errado" "txt=${_band_txt}"; fi
+
+  _band 401 '{"type":"authentication_error"}'
+  if grep -qF "CREDENCIAL" <<< "${_band_txt}"; then
+    record_pass "review-cause-bands: 401 ⇒ credencial recusada (esta SIM é credencial)"
+  else record_fail "review-cause-bands: 401" "txt=${_band_txt}"; fi
+
+  _band 418 'algo exotico'
+  if grep -qF "NÃO classifico" <<< "${_band_txt}"; then
+    record_pass "review-cause-bands: faixa desconhecida ⇒ declara que NÃO classifica (nunca chuta)"
+  else record_fail "review-cause-bands: chutou uma faixa" "txt=${_band_txt}"; fi
+
+  _band 200 ''
+  if [ -z "${_band_txt}" ]; then
+    record_pass "review-cause-bands: 200 ⇒ silêncio (sem causa para narrar)"
+  else record_fail "review-cause-bands: 200 gerou causa" "txt=${_band_txt}"; fi
+
+  # A CAUSA PRECISA VIAJAR: sem os outputs, o verdict volta a dizer só `sem-arquivo`.
+  if grep -q 'preflight_causa: ${{ steps.preflight.outputs.causa }}' "${wf}" \
+     && grep -q 'PF_CAUSA: ${{ needs.onion-review.outputs.preflight_causa }}' "${wf}"; then
+    record_pass "review-cause-bands: a causa VIAJA do pré-voo ao verdict (output do job + env do step)"
+  else record_fail "review-cause-bands: a causa não viaja" "output ou env ausente — o verdict volta a ser mudo"; fi
+  unset -f _band
+}
+
+run_command_role_parity_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/command-role-parity-check.sh"
+  if [ ! -f "${sut}" ]; then record_fail "command-role-parity" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  local H="${d}/.claude/utils/co-evolution" C="${d}/.claude/commands/meta"
+  mkdir -p "${H}" "${C}"
+  _crp() { # $1=conteudo do helper ; $2=conteudo da prosa ; devolve saida+rc em _crp_out/_crp_rc
+    printf '%s\n' "$1" > "${H}/co-relay.sh"
+    printf '%s\n' "$2" > "${C}/co-relay.md"
+    # ⚠️ `cmd; rc=$?` MATA a suíte sob `set -e` — o próprio harness avisa isso, e eu levei a pancada
+    # aqui na 1ª volta. `if` é o único jeito de capturar rc sem abortar ([[bancada-espelha-o-runner]]).
+    if _crp_out="$(bash "${sut}" "${d}" 2>&1)"; then _crp_rc=0; else _crp_rc=$?; fi
+  }
+  local HELPER_LARGO='case "${ROLE}" in
+  adopted|hub|standalone) : ;;
+  *) exit 2 ;;
+esac'
+  local HELPER_ESTREITO='case "${ROLE}" in
+  adopted) : ;;
+  *) exit 2 ;;
+esac'
+
+  # (a) prosa ESTREITA vs helper LARGO ⇒ acusa, e NOMEIA os papéis que faltam (o caso de 2026-09-25)
+  _crp "${HELPER_LARGO}" '- `role: adopted` -> ADOTANTE -> segue.'
+  if [ "${_crp_rc}" -eq 1 ] && grep -q "hub" <<< "${_crp_out}"&& grep -q "standalone" <<< "${_crp_out}"; then
+    record_pass "command-role-parity: (a) prosa estreita ⇒ acusa e NOMEIA hub+standalone"
+  else record_fail "command-role-parity: (a)" "rc=${_crp_rc} out=${_crp_out}"; fi
+
+  # (b) prosa COMPLETA ⇒ silêncio (a cura não vira ruído permanente)
+  _crp "${HELPER_LARGO}" '- `role: adopted`, `hub` ou `standalone` -> ALVO -> segue.'
+  if [ "${_crp_rc}" -eq 0 ] && [ -z "${_crp_out}" ]; then
+    record_pass "command-role-parity: (b) prosa completa ⇒ silêncio"
+  else record_fail "command-role-parity: (b) falso positivo" "rc=${_crp_rc} out=${_crp_out}"; fi
+
+  # (c) helper ESTREITO + prosa larga ⇒ silêncio DESTA regra. Direção deliberada e declarada: a
+  #     assimetria de 2026-09-17 é bug do SCRIPT, não da prosa, e esta guarda cobra a prosa. Fingir
+  #     que ela cobre os dois sentidos seria declarar mais do que mede.
+  _crp "${HELPER_ESTREITO}" '- `role: adopted`, `hub` ou `standalone` -> ALVO -> segue.'
+  if [ "${_crp_rc}" -eq 0 ]; then
+    record_pass "command-role-parity: (c) helper estreito + prosa larga ⇒ silêncio (fronteira declarada)"
+  else record_fail "command-role-parity: (c) cobrou fora do escopo" "rc=${_crp_rc} out=${_crp_out}"; fi
+
+  # (d) FORMATO DO `case` MUDOU ⇒ a guarda diz que NÃO PUDE JULGAR, em vez de passar em silêncio.
+  #     É o caso que separa esta guarda de uma que declara verde por não reconhecer nada.
+  _crp 'if [ "${ROLE}" = "$(cat /dev/null)" ]; then :; fi' '- `role: adopted` -> ADOTANTE'
+  # rc EXATAMENTE 3, não "≠0": a 1ª versão da guarda DECLARAVA rc 3 no cabeçalho e emitia rc 1, e o
+  # caso aceitava qualquer não-zero — logo passava verde sobre a inconsistência que devia pegar.
+  if grep -q "NAO PUDE JULGAR" <<< "${_crp_out}"&& [ "${_crp_rc}" -eq 3 ]; then
+    record_pass "command-role-parity: (d) case irreconhecível ⇒ rc=3 (NÃO PUDE JULGAR, não divergência)"
+  else record_fail "command-role-parity: (d) rc errado ou silêncio" "rc=${_crp_rc} (esperado 3) out=${_crp_out}"; fi
+
+  # (e) SEM par presente (adotante sem co-evolução) ⇒ SEM OBJETO, exit 0 — não nasce vermelho.
+  local e; e="$(mktemp -d)"
+  local _e_out _e_rc
+  if _e_out="$(bash "${sut}" "${e}" 2>&1)"; then _e_rc=0; else _e_rc=$?; fi
+  rm -rf "${e}"
+  if [ "${_e_rc}" -eq 0 ] && grep -q "SEM OBJETO" <<< "${_e_out}"; then
+    record_pass "command-role-parity: (e) sem par helper/comando ⇒ SEM OBJETO (adotante não nasce vermelho)"
+  else record_fail "command-role-parity: (e)" "rc=${_e_rc} out=${_e_out}"; fi
+
+  # (f) O COMENTÁRIO DA PRÓPRIA GUARDA não pode contar como aceitação de papel. Ela cita
+  #     `adopted|hub|standalone` em prosa no topo; se o parser lesse comentário, ela se auto-satisfaria.
+  _crp '# prosa de comentario citando adopted|hub|standalone sem decidir nada
+ROLE_CHECK=nada' '- `role: adopted` -> ADOTANTE'
+  if grep -q "NAO PUDE JULGAR" <<< "${_crp_out}"&& [ "${_crp_rc}" -eq 3 ]; then
+    record_pass "command-role-parity: (f) papel citado só em COMENTÁRIO não conta como aceito"
+  else record_fail "command-role-parity: (f) comentário virou aceitação" "rc=${_crp_rc} out=${_crp_out}"; fi
+
+  # (g) PRECEDÊNCIA: um par DIVERGENTE e outro ILEGÍVEL no mesmo run ⇒ rc=1, não 3. Esconder o que se
+  #     sabe atrás do que não se sabe é o modo-de-falha que esta ordem existe para impedir.
+  printf '%s\n' 'case "${ROLE}" in
+  adopted|hub|standalone) : ;;
+esac' > "${H}/co-relay.sh"
+  printf '%s\n' '- `role: adopted` -> ADOTANTE' > "${C}/co-relay.md"
+  printf '%s\n' 'ROLE_CHECK=nada' > "${H}/co-deliver.sh"
+  printf '%s\n' '- prosa qualquer' > "${C}/co-deliver.md"
+  local _g_out _g_rc
+  if _g_out="$(bash "${sut}" "${d}" 2>&1)"; then _g_rc=0; else _g_rc=$?; fi
+  rm -f "${H}/co-deliver.sh" "${C}/co-deliver.md"
+  if [ "${_g_rc}" -eq 1 ] && grep -q "nao menciona papel" <<< "${_g_out}"&& grep -q "NAO PUDE JULGAR" <<< "${_g_out}"; then
+    record_pass "command-role-parity: (g) divergência + ilegível no mesmo run ⇒ rc=1 (o sabido tem precedência)"
+  else record_fail "command-role-parity: (g) precedência errada" "rc=${_g_rc} (esperado 1) out=${_g_out}"; fi
+
+  # ── (h)(i) OS DOIS ACHADOS DA PASSADA ADVERSARIAL DE 2026-09-25 ──────────────────────────
+  # (h) FRONTEIRA DE PALAVRA: a 1ª versão usava `grep -qiF "hub"`, que casa dentro de `GitHub`.
+  #     Uma prosa SEM o papel `hub` mas com "Abra o PR no GitHub" satisfazia a guarda — a regra
+  #     criada para matar o silêncio sobre `hub` ficava silenciosa pela palavra mais provável de
+  #     aparecer num comando de co-evolução. Estava viva por sorte.
+  #     ⚠️ O helper do caso inclui `source` DE PROPÓSITO: a 1ª redação exigia que a saída cobrasse
+  #     `source` sem que o `case` o aceitasse, e o caso reprovou uma guarda CORRETA. A asserção
+  #     passa pelo mesmo escrutínio do SUT ([[mutant-anchor-is-a-defect-candidate]]).
+  _crp 'case "${ROLE}" in
+  adopted|hub|standalone|source) : ;;
+esac' '- `role: adopted` -> segue. Abra o PR no GitHub. Projeto open source.'
+  if [ "${_crp_rc}" -eq 1 ] && grep -q "hub" <<< "${_crp_out}"&& grep -q "source" <<< "${_crp_out}"; then
+    record_pass "command-role-parity: (h) 'GitHub'/'open source' NÃO satisfazem os papéis hub/source"
+  else record_fail "command-role-parity: (h) substring virou papel" "rc=${_crp_rc} out=${_crp_out}"; fi
+
+  # (i) COMENTÁRIO NO HELPER não sustenta aceitação — e o caso usa a forma REAL que passava:
+  #     uma linha `# ... role: (adopted|hub|standalone) ...` em comentário. O `co-relay.sh` de
+  #     produção TEM essa linha; medido, ela sozinha mantinha a guarda exigindo `hub` da prosa
+  #     mesmo com o `case` estreitado para `adopted)`. Era prosa comparada contra prosa, com o
+  #     cabeçalho da guarda afirmando o oposto.
+  _crp '# o espelho downstream valida role: (adopted|hub|standalone) e entrega a hub/standalone
+case "${ROLE}" in
+  adopted) : ;;
+esac' '- `role: adopted` -> ADOTANTE -> segue.'
+  if [ "${_crp_rc}" -eq 0 ] && [ -z "${_crp_out}" ]; then
+    record_pass "command-role-parity: (i) papel só em COMENTÁRIO do helper ⇒ não é aceito (silêncio)"
+  else record_fail "command-role-parity: (i) comentário sustentou a exigência" "rc=${_crp_rc} out=${_crp_out}"; fi
+  unset -f _crp
 }
 
 run_assemble_plugin_selftests() {
@@ -10799,7 +11205,11 @@ run_codeliver_selftests() {
     printf '# anúncio de teste\n' > "$1/docs/evolution/federation/outbox/alvo/2026-01-01-anuncio.md"
     {
       printf 'members:\n'
-      printf '  - id: alvo\n    role: standalone\n    name: "Alvo Teste"\n'
+      # $3 = role (default standalone, o comportamento histórico) · $4 = parent (vazio = sem campo).
+      # Os dois entraram em 2026-09-25 para exercitar o papel `adopted`, que NENHUM caso cobria — e era
+      # justamente o papel que o carteiro recusava por engano depois da unificação de vocabulário.
+      printf '  - id: alvo\n    role: %s\n    name: "Alvo Teste"\n' "${3:-standalone}"
+      if [ -n "${4:-}" ]; then printf '    parent: %s\n' "$4"; fi
       if [ -n "$2" ]; then printf '    local_path: "%s"   # comentário inline (caso real do members.yaml)\n' "$2"; fi
     } > "$1/docs/evolution/federation/members.yaml"
   }
@@ -10855,6 +11265,37 @@ run_codeliver_selftests() {
     record_pass "co-deliver: (e) stamp com role: source → recusa (downstream é para consumidor)"
   else record_fail "co-deliver: (e) papel do alvo" "rc=${rc} out=${out}"; fi
   rm -rf "${core}" "${other}"
+
+  # ── (f)(g)(h) O PAPEL `adopted` — o que a unificação de vocabulário de 2026-09-24 criou ─────────
+  # Nenhum caso exercitava `role: adopted`, e era exatamente o papel que o carteiro recusava por
+  # engano: `sge` (único membro `adopted` do registro real) ficava fora de TODO anúncio, e o
+  # `resolve-target todos` nem o listava. Silencioso nas duas pontas, nenhum gate acusando.
+  local c2 t2 rc2
+  # (f) adopted + parent = core ⇒ ENTREGA (é T3, adota o core direto)
+  c2="$(mktemp -d)"; t2="$(mktemp -d)"; mk_deliver_adopter "${t2}"; mk_deliver_core "${c2}" "${t2}" adopted onion-evolve
+  rc2=0; ( cd "${c2}" && bash "${helper}" alvo ) >/dev/null 2>&1 || rc2=$?
+  if [ "${rc2}" -eq 0 ] && ls "${t2}/docs/evolution/inbound/"*.md >/dev/null 2>&1; then
+    record_pass "co-deliver: (f) role adopted + parent=core ⇒ ENTREGA (T3 adota o core direto)"
+  else record_fail "co-deliver: (f) adotante direto recusado" "rc=${rc2} — o furo de 2026-09-25 voltou"; fi
+  rm -rf "${c2}" "${t2}"
+
+  # (g) adopted + parent = um HUB ⇒ RECUSA, e a mensagem NOMEIA o hub (RFC-0003 §2.1 intacta)
+  c2="$(mktemp -d)"; t2="$(mktemp -d)"; mk_deliver_adopter "${t2}"; mk_deliver_core "${c2}" "${t2}" adopted algum-hub
+  local out2
+  if out2="$( ( cd "${c2}" && bash "${helper}" alvo ) 2>&1 )"; then rc2=0; else rc2=$?; fi
+  if [ "${rc2}" -ne 0 ] && grep -qF "algum-hub" <<< "${out2}"; then
+    record_pass "co-deliver: (g) role adopted + parent=hub ⇒ recusa NOMEANDO o hub (T2 recebe pelo hub)"
+  else record_fail "co-deliver: (g) T2 recebeu do core" "rc=${rc2} out=${out2:0:200}"; fi
+  rm -rf "${c2}" "${t2}"
+
+  # (h) adopted SEM parent ⇒ recusa PEDINDO o campo. `adopted` é a palavra ambígua (nomeia o direto e
+  #     o adotado-por-hub); escolher um lado por conveniência seria decidir o que não se sabe.
+  c2="$(mktemp -d)"; t2="$(mktemp -d)"; mk_deliver_adopter "${t2}"; mk_deliver_core "${c2}" "${t2}" adopted ""
+  if out2="$( ( cd "${c2}" && bash "${helper}" alvo ) 2>&1 )"; then rc2=0; else rc2=$?; fi
+  if [ "${rc2}" -ne 0 ] && grep -qF "parent:" <<< "${out2}"; then
+    record_pass "co-deliver: (h) adopted SEM parent ⇒ recusa PEDINDO o campo (não escolhe um lado)"
+  else record_fail "co-deliver: (h) decidiu sem saber" "rc=${rc2} out=${out2:0:200}"; fi
+  rm -rf "${c2}" "${t2}"
 }
 
 # ---------------------------------------------------------------------------
@@ -12218,7 +12659,19 @@ run_session_beacon_selftests() {
   fake_dir="$(mktemp -d)"
   if cp "$(command -v sleep)" "${fake_dir}/claude" 2>/dev/null; then
     "${fake_dir}/claude" 30 & fake_pid=$!
-    if [ "$(cat "/proc/${fake_pid}/comm" 2>/dev/null || true)" = "claude" ]; then
+    # ESPERA O `exec`, com teto. A 1a forma lia `/proc/<pid>/comm` NA HORA, e isso e corrida: entre o
+    # `&` e o exec do filho o comm ainda e o do shell, o caso caia no `record_skip` e sob
+    # ONION_SELFTEST_STRICT=1 o ⊘ PINTA O CI DE VERMELHO. Medido 2026-09-23: a mesma faixa passou as
+    # 18:33 e reprovou as 23:45 sem nenhuma mudanca no SUT — assinatura de corrida, nao de host.
+    # Teto de 2s (40 x 50ms) e o comm OBSERVADO entra na mensagem: skip sem dizer o que viu e flaky
+    # para sempre.
+    local _fake_comm=""
+    for _ in $(seq 40); do
+      _fake_comm="$(cat "/proc/${fake_pid}/comm" 2>/dev/null || true)"
+      [ "${_fake_comm}" = "claude" ] && break
+      sleep 0.05
+    done
+    if [ "${_fake_comm}" = "claude" ]; then
       ONION_BEACON_OWNER_PID="${fake_pid}" bash "${sb}" up "${d}" "sess-eleito"
       out="$(awk -F': ' '/^owner_pid:/{print $2; exit}' "${d}/.claude/beacons/sess-eleito.beacon" 2>/dev/null || true)"
       if [ "${out}" = "${fake_pid}" ] \
@@ -12242,7 +12695,7 @@ run_session_beacon_selftests() {
       else record_fail "session-beacon: sweep preserva" "sweep apagou beacon de sessão viva"; fi
       bash "${sb}" down "${d}" "sess-eleito"
     else
-      record_skip "session-beacon: sonda elege/preserva/sweep-vivo — comm não observável neste host"
+      record_skip "session-beacon: sonda elege/preserva/sweep-vivo — comm não observável neste host após 2s de espera (último comm visto: '${_fake_comm:-<vazio>}')"
     fi
     kill "${fake_pid}" 2>/dev/null || true; wait "${fake_pid}" 2>/dev/null || true
   else
@@ -12685,11 +13138,27 @@ run_fixtures_selftests() {
 local _shard_i=0 _shard_n=1 _shard_k=0
 case "${SELFTEST_SHARD:-}" in */*) _shard_i="${SELFTEST_SHARD%/*}"; _shard_n="${SELFTEST_SHARD#*/}" ;; esac
 if [ -f "${MANIFEST}" ]; then
-  while IFS=$'\t' read -r kind fixture target verdict keyword || [ -n "${kind:-}" ]; do
+  # 6a coluna OPCIONAL `inject` (2026-09-23): o nome do arquivo injetado era FIXO em
+  # `selftest-fixture-probe.md`, e isso tornava o §11.1 de commands.md INSATISFAZIVEL para toda guarda
+  # cujo universo nao seja `.md` — a REGRA 89 (Rodada de radar selada reconcilia o corpus que superou
+  # (Aufhebung), com catraca) varre `*/radar-*/*.kg.yaml`, entao nenhuma fixture do manifesto jamais a
+  # alcancaria. A norma exige fixture para toda guarda alterada; sem esta coluna, obedecer era
+  # impossivel e a unica saida era dispensa. Coluna vazia = o nome antigo, entao as 110 linhas
+  # existentes seguem intactas.
+  while IFS=$'\t' read -r kind fixture target verdict keyword inject || [ -n "${kind:-}" ]; do
     kind="${kind:-}"
     [ -z "${kind}" ] && continue
     [ "${kind#\#}" != "${kind}" ] && continue   # linha de comentário
     [ "${kind}" = "kind" ] && continue           # header
+    # SENTINELA `-` PARA CAMPO VAZIO (refutador independente, 2026-09-24): `IFS=$'\t'` trata TAB como
+    # IFS-whitespace, entao TABs consecutivos COLAPSAM num delimitador so. Consequencia medida: numa
+    # linha de 5o campo vazio (`good`/`exempt`/`pass`/`fail` — 22 delas ja terminam em TAB hoje), dar
+    # nome de injecao fazia o valor cair em `keyword` e `inject` ficar vazio, EM SILENCIO: a fixture
+    # voltava a ser injetada como `.md`. A coluna nova era inalcancavel justamente para as linhas que
+    # mais precisariam dela (o caso `good`/`exempt` que o §11.1 pede). `-` e o idioma que este
+    # manifesto ja usa na coluna `target` das linhas `members`.
+    [ "${keyword:-}" = "-" ] && keyword=""
+    [ "${inject:-}" = "-" ] && inject=""
     _shard_k=$(( _shard_k + 1 ))
     [ $(( (_shard_k - 1) % _shard_n )) -eq "${_shard_i}" ] || continue
     # CORE-ONLY no adotante (Q_SELFTEST_VENDORIZADO_INSATISFAZIVEL_NO_ADOTANTE, cura (a), 2026-09-03): em repo
@@ -12702,7 +13171,7 @@ if [ -f "${MANIFEST}" ]; then
       esac
     fi
     case "${kind}" in
-      lint)     run_lint_fixture "${fixture}" "${target}" "${verdict}" "${keyword:-}" ;;
+      lint)     run_lint_fixture "${fixture}" "${target}" "${verdict}" "${keyword:-}" "${inject:-}" ;;
       fix)      run_fix_fixture "${fixture}" "${target}" "${verdict}" ;;
       contract) run_contract_fixture "${fixture}" "${verdict}" ;;
       members)  run_members_fixture "${fixture}" "${verdict}" ;;
@@ -13307,8 +13776,11 @@ run_role_cut_selftests() {
   #     citado 32x nas mensagens, `/meta:kg-freshness` 27x).
   #
   #     EXCEÇÕES, e cada uma tem razão nomeada: são comandos citados por guardas que NÃO rodam num
-  #     alvo — autoria do framework (`adopt`, `create-*`, `evolve`) e federação cross-empresa
+  #     alvo — autoria do framework (`adopt`, `create-*`, `evolve`, `forge`) e federação cross-empresa
   #     (`federation-*`, `co-announce`, `co-deliver`, este último já no conjunto `downstream`).
+  #     `forge` entrou em 2026-09-29: é Camada 1 (autoria do framework), declarado core-only no
+  #     próprio `forge.md`, e o `forge-census.sh` o cita numa linha de comentário. O caso pegou na
+  #     primeira corrida depois de o comando nascer — mecanismo funcionando, não burocracia.
   if [ -f "${_resolver}" ]; then
     local _full; _full="$(bash "${_resolver}" standalone --tools 2>/dev/null)"
     local _citados _c _orfaos=""
@@ -13316,7 +13788,7 @@ run_role_cut_selftests() {
     while IFS= read -r _c; do
       [ -n "${_c}" ] || continue
       case "${_c}" in
-        adopt|evolve|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
+        adopt|evolve|forge|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
         nao|federation-) continue ;;                                            # falsos positivos do grep
       esac
       [ -f "${REPO_ROOT}/.claude/commands/meta/${_c}.md" ] || continue          # comando que não existe
@@ -17038,9 +17510,190 @@ run_model_ssot_selftests() {
 # As duas curas desta família nasceram da PRIMEIRA materialização real (2026-09-17), e as duas são
 # do tipo que só aparece publicando: o bundle levava chave nomeada por cliente (salva de subir por
 # um `.gitignore` do destino — acidente, não desenho) e a porta subiu sem README/LICENSE/CLAUDE.md.
+# ═══ ops/door-seal-pin.sh — o registro só é carimbado com o REMOTO conferido ══════════════
+# POR QUE EXISTE: o `onion_version` de um membro `kind: door` é LIDO pela REGRA 85 (Porta publica
+# espelha o core, com catraca) para decidir defasagem, e era mantido A MAO. Apodreceu DUAS VEZES em
+# 2026-09-25/26 — a segunda em duas horas, depois de eu escrever no proprio members.yaml que
+# "numero mantido a mao apodrece". O script fecha isso, e esta familia prende as SEIS portas de
+# saida fail-closed dele, porque um carimbo que erra afirma PUBLICO o que pode nao ser.
+# ⚠️ O `gh` e esbocado: o SUT fala com a rede, e o esboco ESPELHA a consulta real
+# (`gh api repos/<owner>/<repo>/commits/<branch> --jq .sha`).
+run_door_seal_pin_selftests() {
+  local sut="${REPO_ROOT}/ops/door-seal-pin.sh"
+  if [ ! -f "${sut}" ]; then record_skip "door-seal-pin: ops/ ausente (adotante) → pulado"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+
+  # ── fakecore falso: repo git com origin/main de verdade (clone local), ops/ e o resolver ────────
+  local upstream="${d}/upstream" fakecore="${d}/fakecore" doorway="${d}/doorway"
+  mkdir -p "${upstream}"; git -C "${upstream}" init -q -b main
+  git -C "${upstream}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+  local PIN_OK; PIN_OK="$(git -C "${upstream}" rev-parse --short=12 HEAD)"
+  git clone -q "${upstream}" "${fakecore}" 2>/dev/null
+  mkdir -p "${fakecore}/ops" "${fakecore}/.claude/validation" "${fakecore}/docs/evolution/federation"
+  cp "${sut}" "${fakecore}/ops/"
+  cp "${REPO_ROOT}/.claude/validation/resolve-integration-branch.sh" "${fakecore}/.claude/validation/" 2>/dev/null || true
+  # commit SÓ no core falso (não empurrado) → serve de "pin fora da integração"
+  git -C "${fakecore}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "fora da integracao"
+  local PIN_FORA; PIN_FORA="$(git -C "${fakecore}" rev-parse --short=12 HEAD)"
+
+  # ── doorway falsa: clone git com stamp declarando um pin ────────────────────────────────────
+  mkdir -p "${doorway}/.claude"; git -C "${doorway}" init -q -b main
+  _doorway_stamp() {  # $1 = pin declarado
+    printf 'role: hub\nadopted_from: onion-fakecore\nonion_version: %s\nmaterialized_at: 2026-09-26\n' "$1" > "${doorway}/.claude/.onion-version"
+    git -C "${doorway}" add -A >/dev/null 2>&1
+    # `|| true`: chamar o helper duas vezes com o MESMO pin não tem o que commitar, e `git commit`
+    # sai não-zero aí — que sob `set -e` mata a suíte inteira, sem registrar nenhum ✗. Terceira vez
+    # nesta leva que essa armadilha aparece; o helper passa a tolerá-la em vez de cada caso lembrar.
+    git -C "${doorway}" -c user.email=t@t -c user.name=t commit -q -m "stamp $1" 2>/dev/null || true
+  }
+  _registry() {  # $1 = kind ; $2 = pin no registro
+    { printf 'members:\n'
+      printf '  - id: doorway-teste\n    kind: %s\n    remote: github.com/dono/doorway-teste\n' "$1"
+      printf '    local_path: "%s"\n    onion_version: %s   # comentário inline preservado?\n' "${doorway}" "$2"
+      printf '  - id: outro\n    kind: adopter\n    onion_version: aaaaaaaaaaaa\n'
+    } > "${fakecore}/docs/evolution/federation/members.yaml"
+  }
+  # esboço do `gh`: devolve o sha que GH_REMOTE_SHA mandar (vazio = remoto ilegível)
+  cat > "${d}/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"api repos/"*commits*) [ -n "${GH_REMOTE_SHA:-}" ] && echo "${GH_REMOTE_SHA}"; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "${d}/gh"
+  local _o _r
+  _seal() {  # $@ = flags extra ; usa GH_REMOTE_SHA do ambiente
+    if _o="$(PATH="${d}:${PATH}" bash "${fakecore}/ops/door-seal-pin.sh" doorway-teste "$@" 2>&1)"; then _r=0; else _r=$?; fi
+  }
+
+  # (a) tudo conferido + registro DEFASADO ⇒ carimba, e o comentário do resto do arquivo sobrevive
+  _doorway_stamp "${PIN_OK}"; _registry door "ffffffffffff"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 0 ] && grep -qF "onion_version: ${PIN_OK}" "${fakecore}/docs/evolution/federation/members.yaml" \
+     && grep -qF "onion_version: aaaaaaaaaaaa" "${fakecore}/docs/evolution/federation/members.yaml"; then
+    record_pass "door-seal-pin: (a) remoto conferido + registro defasado ⇒ carimba SÓ o membro certo"
+  else record_fail "door-seal-pin: (a)" "rc=${_r} out=${_o:0:250}"; fi
+
+  # (b) registro JÁ em dia ⇒ no-op explícito (não reescreve, não mente que carimbou)
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 0 ] && grep -qF "já em dia" <<< "${_o}"; then
+    record_pass "door-seal-pin: (b) registro em dia ⇒ no-op declarado"
+  else record_fail "door-seal-pin: (b)" "rc=${_r} out=${_o:0:200}"; fi
+
+  # (c) PUSH NÃO ACONTECEU (clone ≠ remoto) ⇒ recusa. É a doorway que mais imdoorway: carimbar aqui
+  #     afirmaria PÚBLICO um commit que só existe no disco.
+  _registry door "ffffffffffff"
+  GH_REMOTE_SHA="0000000000000000000000000000000000000000" _seal
+  if [ "${_r}" -eq 1 ] && grep -qiE 'nao bate|NÃO bate' <<< "${_o}"; then
+    record_pass "door-seal-pin: (c) clone ≠ remoto ⇒ recusa (não afirma público o que é local)"
+  else record_fail "door-seal-pin: (c) carimbou sem push" "rc=${_r} out=${_o:0:200}"; fi
+
+  # (d) REMOTO ILEGÍVEL ⇒ rc=2 e NÃO carimba. "Não pude conferir" nunca vira "está certo".
+  GH_REMOTE_SHA="" _seal
+  if [ "${_r}" -eq 2 ] && grep -qF "ffffffffffff" "${fakecore}/docs/evolution/federation/members.yaml"; then
+    record_pass "door-seal-pin: (d) remoto ilegível ⇒ rc=2 e registro INTACTO"
+  else record_fail "door-seal-pin: (d)" "rc=${_r} out=${_o:0:200}"; fi
+
+  # (e) pin FORA da integração (doorway materializada de branch — o defeito de 2026-09-25) ⇒ recusa
+  _doorway_stamp "${PIN_FORA}"; _registry door "ffffffffffff"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 1 ] && grep -qiE 'nao esta em origin|NÃO está em origin' <<< "${_o}"; then
+    record_pass "door-seal-pin: (e) pin fora de origin/main ⇒ recusa (não legitima doorway de branch)"
+  else record_fail "door-seal-pin: (e)" "rc=${_r} out=${_o:0:250}"; fi
+
+  # (f) pin que NÃO é commit deste core (forjado/truncado) ⇒ recusa
+  _doorway_stamp "deadbeefcafe"; _registry door "ffffffffffff"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 1 ] && grep -qiE 'nao e commit|NÃO é commit' <<< "${_o}"; then
+    record_pass "door-seal-pin: (f) pin forjado ⇒ recusa"
+  else record_fail "door-seal-pin: (f)" "rc=${_r} out=${_o:0:200}"; fi
+
+  # (g) kind ≠ door ⇒ rc=2. O objeto desta guarda é PORTA; adotante comum não é espelho do core falso.
+  _doorway_stamp "${PIN_OK}"; _registry adopter "ffffffffffff"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 2 ] && grep -qiE "nao 'door'|não 'door'" <<< "${_o}"; then
+    record_pass "door-seal-pin: (g) kind ≠ door ⇒ rc=2 (fora do objeto da guarda)"
+  else record_fail "door-seal-pin: (g)" "rc=${_r} out=${_o:0:200}"; fi
+
+  # (h) --dry-run NÃO escreve — a diferença entre ver e fazer é medida, não prometida
+  _registry door "ffffffffffff"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal --dry-run
+  if [ "${_r}" -eq 0 ] && grep -qF "ffffffffffff" "${fakecore}/docs/evolution/federation/members.yaml"; then
+    record_pass "door-seal-pin: (h) --dry-run mostra e NÃO escreve"
+  else record_fail "door-seal-pin: (h) dry-run escreveu" "rc=${_r} out=${_o:0:200}"; fi
+
+  # (i) stamp com pin ILEGÍVEL ⇒ rc=2. Não se carimba o que não se consegue ler.
+  # ── (j)(k) O DEFEITO QUE O PRÓPRIO DOGFOOD ACHOU, na 1ª execução real (2026-09-26) ──────────
+  # A v1 lia o pin do stamp da ÁRVORE DE TRABALHO. Rodado depois de materializar e ANTES de commitar,
+  # ele lia o pin NOVO (só no disco) e comparava `HEAD` do clone com o remoto — e `HEAD` ainda era o
+  # commit antigo, IGUAL ao remoto. As duas conferências passavam, e ele carimbou como PUBLICADO um pin
+  # que não existia além do disco: exatamente o que este script existe para impedir.
+  # ⚠️ E o caso (c) NÃO pegava isso: ele esboça um remoto DIFERENTE, cenário que o fluxo real não
+  # produz. Caso que testa um mundo que não acontece não é cobertura.
+  _doorway_stamp "${PIN_OK}"; _registry door "ffffffffffff"
+  printf 'materializado, nao commitado\n' > "${doorway}/sujeira.txt"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  rm -f "${doorway}/sujeira.txt"
+  if [ "${_r}" -eq 1 ] && grep -qiE 'nao-commitado|não-commitado' <<< "${_o}" \
+     && grep -qF "ffffffffffff" "${fakecore}/docs/evolution/federation/members.yaml"; then
+    record_pass "door-seal-pin: (j) árvore da porta SUJA ⇒ recusa e registro INTACTO (disco ≠ publicação)"
+  else record_fail "door-seal-pin: (j) carimbou materialização não-commitada" "rc=${_r} out=${_o:0:250}"; fi
+
+  # (k) o pin vem do stamp COMMITADO (`git show HEAD:`), não do disco — a fonte da leitura É a defesa.
+  _doorway_stamp "${PIN_OK}"; _registry door "ffffffffffff"
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 0 ] && grep -qF "onion_version: ${PIN_OK}" "${fakecore}/docs/evolution/federation/members.yaml"; then
+    record_pass "door-seal-pin: (k) pin lido do stamp COMMITADO, não da árvore"
+  else record_fail "door-seal-pin: (k)" "rc=${_r} out=${_o:0:200}"; fi
+
+  # ⚠️ COMMITADO de propósito: desde a cura de 2026-09-26 o pin é lido de `git show HEAD:`, e árvore
+  #    suja recusa ANTES. Escrever só no disco faria este caso medir a guarda ERRADA — foi o que
+  #    aconteceu na 1ª volta, e o ✗ apontou para a guarda nova em vez do defeito que (i) persegue.
+  printf 'role: hub\nonion_version: nao-e-um-sha\n' > "${doorway}/.claude/.onion-version"
+  git -C "${doorway}" add -A >/dev/null 2>&1
+  git -C "${doorway}" -c user.email=t@t -c user.name=t commit -q -m 'stamp ilegivel' 2>/dev/null || true
+  GH_REMOTE_SHA="$(git -C "${doorway}" rev-parse HEAD)" _seal
+  if [ "${_r}" -eq 2 ] && grep -qiE 'ilegivel|ilegível' <<< "${_o}"; then
+    record_pass "door-seal-pin: (i) pin ilegível no stamp ⇒ rc=2"
+  else record_fail "door-seal-pin: (i)" "rc=${_r} out=${_o:0:200}"; fi
+  unset -f _seal _doorway_stamp _registry
+}
+
 run_door_selftests() {
   local sb2 out rc
   sb2="$(mktemp -d)"
+
+  # ── (0) A FONTE DA PORTA É `origin/<integração>`, NUNCA O `HEAD` LOCAL ──────────────────────
+  # Defeito medido 2026-09-25, com raio PÚBLICO: `materialize-door.sh` usava `git archive HEAD` e
+  # `rev-parse HEAD`. Rodado de uma branch de trabalho — o estado NORMAL de quem acabou de abrir um
+  # PR — montava a porta com conteúdo NÃO MERGEADO e carimbava o pin com o SHA da branch. Observado
+  # ao vivo: pin do topo de um PR aberto, com `main` dois commits atrás. A doutrina do CLAUDE.md
+  # sempre disse "projeção gerada de origin/main": declarado ≠ implementado.
+  # O dano não aconteceu porque a OUTRA fronteira (o push é do maestro) segurou. Os 8 pins históricos
+  # foram medidos e TODOS estão em main — latente até hoje. Este caso existe para que a próxima vez
+  # não dependa de alguém estar numa branch limpa.
+  if [ -f "${REPO_ROOT}/ops/materialize-door.sh" ]; then
+    if grep -qE 'archive --format=tar[[:space:]]+HEAD|rev-parse --short=12 HEAD' "${REPO_ROOT}/ops/materialize-door.sh"; then
+      record_fail "door: (0) a porta materializa do HEAD LOCAL" \
+        "ops/materialize-door.sh voltou a usar HEAD — rodado de uma branch de PR aberto, isso publica código NÃO MERGEADO num repo público"
+    else
+      record_pass "door: (0) a porta não materializa do HEAD local (fonte é a ref de integração)"
+    fi
+    # E o fail-closed: sem ref resolvível, NÃO materializa. Repo sem `origin` é o sandbox natural.
+    local _dsb _dout _drc
+    _dsb="$(mktemp -d)"; git -C "${_dsb}" init -q 2>/dev/null
+    git -C "${_dsb}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+    if _dout="$(cd "${_dsb}" && bash "${REPO_ROOT}/ops/materialize-door.sh" "${_dsb}/porta" --from naoexiste 2>&1)"; then _drc=0; else _drc=$?; fi
+    if [ "${_drc}" -ne 0 ] && grep -qiE 'não resolve|nao resolve' <<< "${_dout}"; then
+      record_pass "door: (0b) ref de origem irresolúvel ⇒ ABORTA (porta que não sabe de onde nasce não nasce)"
+    else
+      record_fail "door: (0b) fail-open na fonte" "rc=${_drc} out=${_dout:0:250}"
+    fi
+    rm -rf "${_dsb}"
+  else
+    record_skip "door: (0) ops/materialize-door.sh ausente (adotante) → pulado"
+  fi
 
   # (a) chave nomeada por membro NÃO viaja, em NENHUM papel
   local r pem_total=0
@@ -17110,14 +17763,14 @@ run_door_selftests() {
   local d5; d5="$(mktemp -d)"; rm -rf "${d5}"
   if bash "${REPO_ROOT}/ops/materialize-door.sh" "${d5}" --role standalone >/dev/null 2>&1; then
     # as 5 projeções SSOT que o regenerador produz; basta UMA ausente para o defeito ter voltado
-    local _faltam=0 _p
+    local _absent_n=0 _p
     for _p in docs/onion/inventory.md docs/onion/graph.md docs/onion/kg-read-index.tsv \
               docs/onion/testing-inventory.md docs/onion/testing-state.md; do
-      [ -s "${d5}/${_p}" ] || _faltam=$((_faltam + 1))
+      [ -s "${d5}/${_p}" ] || _absent_n=$((_absent_n + 1))
     done
-    if [ "${_faltam}" -eq 0 ]; then
+    if [ "${_absent_n}" -eq 0 ]; then
       record_pass "door: (f) papel SEM o regenerador ainda sai com as 5 projeções (rodado do core)"
-    else record_fail "door: (f)" "${_faltam} projeção(ões) ausente(s) no papel standalone — o fail-open de :238 voltou"; fi
+    else record_fail "door: (f)" "${_absent_n} projeção(ões) ausente(s) no papel standalone — o fail-open de :238 voltou"; fi
   else record_fail "door: (f)" "materialização standalone abortou"; fi
   rm -rf "${d5}"
 
@@ -17138,12 +17791,50 @@ run_door_selftests() {
           | tar -C "${REPO_ROOT}" --null -T - -cf - 2>/dev/null | tar -x -C "${fake}" 2>/dev/null; then
     rm -f "${fake}/.claude/utils/adopt/regen-ssot-projections.sh"
     local _out_g
-    _out_g="$(bash "${fake}/ops/materialize-door.sh" "${d6}" --role standalone 2>&1 || true)"
+    # ⚠️ `--from HEAD` DELIBERADO, e o porquê importa: desde 2026-09-25 o script resolve a fonte em
+    #    `origin/<integração>` e ABORTA fail-closed se ela não resolver (a porta não nasce sem saber de
+    #    onde vem). O core falso deste caso é um CLONE RASO, e no CI — onde o próprio checkout é raso —
+    #    `origin/main` não existe nele; o abort disparava ANTES do passo que este caso mede, e a
+    #    família caía por um motivo que nada tem a ver com o regenerador. Medido: passou local (a ref
+    #    existe aqui) e falhou no CI, que é a assinatura de bancada medindo ambiente em vez de artefato.
+    #    Este caso é sobre o REGENERADOR ausente; a fonte é satisfeita explicitamente para ele chegar lá.
+    #    Quem cobre a resolução de fonte são os casos (0)/(0b), que existem justamente para isso.
+    _out_g="$(bash "${fake}/ops/materialize-door.sh" "${d6}" --role standalone --from HEAD 2>&1 || true)"
     if grep -q 'regen-ssot-projections.sh AUSENTE' <<< "${_out_g}"; then
       record_pass "door: (g) sem regenerador em lugar nenhum → a guarda DECLARA (nunca calada)"
     else record_fail "door: (g)" "seguiu calada sem o regenerador: $(_emit "${_out_g}" | tail -3 | head -c 200)"; fi
   else record_fail "door: (g)" "o core falso não pôde ser montado (clone raso + cópia da árvore)"; fi
   rm -rf "${d6}" "${fake}"
+
+  # (h) DESTINO ANINHADO EM OUTRO REPO ⇒ ABORTA, e sem tocar o índice do hospedeiro.
+  #     Irmão obrigatório da cura de (f): para que as projeções nasçam certas, o materializador
+  #     passou a stajar o destino (`git add -A`) antes de regenerar. Num destino DENTRO de outro repo
+  #     o `rev-parse` resolve para o índice de FORA, e aquele staging levaria a porta inteira para o
+  #     índice do hospedeiro — efeito silencioso e caro. O caso mede as duas metades: rc≠0 com a
+  #     causa NOMEADA, e o índice do core inalterado depois da tentativa.
+  local d7 _out_h _st_before _st_after
+  # ⚠️ O DESTINO NÃO PODE MORAR EM `.claude/worktrees/`, e a passada adversarial de 2026-09-28 mediu
+  #     por quê: aquele diretório não é RASTREADO e não existe num checkout fresco. Sem o pai, a
+  #     pré-condição nova do materializador (`o diretório pai não existe`) dispara PRIMEIRO, com outra
+  #     mensagem — o grep abaixo não casa e o caso acusa a guarda de não ter recusado quando ela
+  #     recusou. Verde aqui, vermelho no CI, que é a assinatura de bancada medindo AMBIENTE. Pior: o
+  #     mesmo diretório está ignorado via `.git/info/exclude` (arquivo não versionado), então a 2ª
+  #     metade — "o índice do hospedeiro fica intacto" — era VÁCUA aqui e inalcançável lá. O pai tem
+  #     de existir SEMPRE e não ser ignorado: a raiz do repo serve, e é o que os outros casos da
+  #     família já fazem com `mktemp`.
+  d7="${REPO_ROOT}/__bancada-porta-aninhada-$$"
+  rm -rf "${d7}"
+  _st_before="$(git -C "${REPO_ROOT}" status --porcelain 2>/dev/null | sort)"
+  _out_h="$(bash "${REPO_ROOT}/ops/materialize-door.sh" "${d7}" --role standalone --from HEAD 2>&1 || true)"
+  _st_after="$(git -C "${REPO_ROOT}" status --porcelain 2>/dev/null | sort)"
+  if ! grep -q 'está DENTRO do repo' <<< "${_out_h}"; then
+    record_fail "door: (h)" "destino aninhado NÃO foi recusado — o staging iria para o índice do hospedeiro: $(_emit "${_out_h}" | tail -3 | head -c 200)"
+  elif [ "${_st_before}" != "${_st_after}" ]; then
+    record_fail "door: (h)" "recusou, mas o índice/árvore do core MUDOU na tentativa (a recusa veio tarde demais)"
+  else
+    record_pass "door: (h) destino aninhado em outro repo ⇒ ABORTA, e o índice do hospedeiro fica intacto"
+  fi
+  rm -rf "${d7}"
 
   rm -rf "${d4}" "${d3}" "${sb2}"
 }
@@ -17705,12 +18396,18 @@ run_role_scope_selftests() {
   cp "${vm}" "${sb3}/.claude/utils/adopt/" 2>/dev/null || true
   {
     sed -n '/^_ROLE_OF_THIS_REPO=""/,/^}/p'      "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
+    # ⚠️ `_expand_braces` É DEPENDÊNCIA NOVA de `_rule_glob_matches` (2026-09-29) e este harness a
+    #    ignorava: a bancada ABORTOU com `exit 127 · _expand_braces: command not found`. Classe
+    #    [[fail-closed-exposes-incomplete-harness]] — a cura é no HARNESS, nunca afrouxar a guarda.
+    #    A lista de símbolos exigidos abaixo também a nomeia, senão a ausência volta como veredito
+    #    silencioso em vez de skip declarado.
+    sed -n '/^_expand_braces()/,/^}/p'          "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_glob_literal_prefix()/,/^}/p'    "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_traveling_surface()/,/^}/p'   "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_rule_without_object_for_role()/,/^}/p' "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
     sed -n '/^_rule_glob_matches()/,/^}/p'      "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
   } > "${sb3}/pred2.sh"
-  if ! _rs_syms_ok "${sb3}/pred2.sh" _rule_without_object_for_role _traveling_surface _glob_literal_prefix _rule_glob_matches; then
+  if ! _rs_syms_ok "${sb3}/pred2.sh" _rule_without_object_for_role _traveling_surface _expand_braces _glob_literal_prefix _rule_glob_matches; then
     record_skip "role-scope: (d)(e)(f)(g) NAO exercidos — o predicado nao montou"
     rm -rf "${sb3}"; return 0
   fi
@@ -17720,7 +18417,7 @@ run_role_scope_selftests() {
     else rm -f "${sb3}/.claude/.onion-version"; fi
     REPO_ROOT="${sb3}" CLAUDE_DIR="${sb3}/.claude" bash -c '
       source "'"${sb3}"'/pred2.sh"
-      for _fn in _rule_without_object_for_role _traveling_surface _glob_literal_prefix _rule_glob_matches; do
+      for _fn in _rule_without_object_for_role _traveling_surface _expand_braces _glob_literal_prefix _rule_glob_matches; do
         declare -F "${_fn}" >/dev/null 2>&1 || { echo "SEM-FUNCAO:${_fn}"; exit 0; }
       done
       '"$2"'' 2>&1
@@ -18128,6 +18825,7 @@ _family run_onion_version_tracked_selftests
 _family run_hub_role_guard_selftests
 _family run_inventory_adopter_scope_selftests
 _family run_door_selftests
+_family run_door_seal_pin_selftests
 _family run_door_cycle_selftests
 # ── REGRA 86: workflow que não parseia é workflow MORTO, e o repo não sabe ────────────────────
 # Nasceu de um `env:` duplicado que deixou o `onion-review-diagnose.yml` inexecutável por um dia
@@ -18312,6 +19010,12 @@ run_regen_completude_selftests() {
     "federation-console.sh"     # deriva de docs/evolution/federation/members.yaml — CORE-ONLY: sem registro, não há mapa nem console a gerar
     "marketplace-root-check.sh" # marketplace é CORE-ONLY (só a fonte publica plugin)
     "vendor-scrub-form-check.sh" # emite BASELINE, não projeção: baseline é LEDGER DO ALVO e o do core nunca viaja
+    # Mesma natureza do acima, e a forma CHAVEADA é o que torna a isenção segura: as linhas são
+    # caminhos de rodada do CORE (`docs/evolution/research/radar-*/…`), e o `regen-baselines.sh`
+    # filtra entrada com forma de caminho — o adotante nasce com a lista VAZIA, que é o certo.
+    # Na 1ª versão o baseline era um inteiro nu (`1`), que não tem barra, não era filtrado, e o
+    # adotante herdava um teto do core que ele nunca mereceu (achado da passada adversarial).
+    "radar-aufhebung-check.sh"  # emite BASELINE chaveado por rodada do core — não é projeção, e não viaja
     "kg-view.sh"                # visualizador POR-GRAFO (exige argumento), não gerador de projeção
     # ⚠️ ACHADO PELO PRÓPRIO CASO, na 1ª execução dele (2026-09-17): eu tinha varrido à mão e
     # perdido este, porque a frase da mensagem dele difere um pouco das outras. O oráculo derivado
@@ -18397,6 +19101,31 @@ run_regen_core_projections_selftests() {
     record_pass "regen-core: (d) gerador ausente → declara que não julgou (nunca inventa)"
   else record_fail "regen-core: (d)" "não declarou o gerador ausente: ${out:0:160}"; fi
   rm -rf "${sb}"
+  # (PARIDADE) O core não pode fechar MENOS projeções que o adotante — o achado de fundo de
+  # 2026-09-30. Medido naquele dia: o `regen-ssot-projections.sh`, que VIAJA, fechava seis
+  # projeções (graph, inventory, testing-inventory, testing-state, lint-rules, kg-read-index) e
+  # este, do core, fechava quatro — faltavam `testing-state`, `testing-inventory`, `graph` e
+  # `inventory`. Consequência medida: TRÊS rodadas de CI seguidas reprovadas no mesmo dia, cada uma
+  # por uma projeção que eu tinha de lembrar de regenerar à mão. O predicado é PARIDADE e não lista
+  # digitada de propósito: lista nova é terceira fonte que caduca; paridade se conserta sozinha
+  # quando o regen do adotante cresce.
+  local _ssot="${REPO_ROOT}/.claude/utils/adopt/regen-ssot-projections.sh"
+  local _core="${REPO_ROOT}/.claude/validation/regen-core-projections.sh"
+  if [ -f "${_ssot}" ] && [ -f "${_core}" ]; then
+    local _absent="" _d
+    while IFS= read -r _d; do
+      [ -n "${_d}" ] || continue
+      grep -qF "${_d}" "${_core}" || _absent="${_absent}${_d} "
+    done < <(grep -ohE 'docs/onion/[a-z0-9-]+\.(md|json|html)' "${_ssot}" | sort -u)
+    if [ -z "${_absent}" ]; then
+      record_pass "regen-core: (PARIDADE) toda projeção docs/onion que o regen do ADOTANTE fecha também está no regen do CORE"
+    else
+      record_fail "regen-core: (PARIDADE)" "o core fecha MENOS que o adotante — fora do regen-core: ${_absent}— foi exatamente esta lacuna que reprovou 3 CI em 2026-09-30"
+    fi
+  else
+    record_skip "regen-core: (PARIDADE) um dos dois regens ausente — não medida"
+  fi
+
 }
 
 # ── A REDE DEBAIXO DA REGRA 36 (2026-09-18) ──────────────────────────────────────────────────
@@ -18464,6 +19193,689 @@ _family run_pretooluse_veto_selftests
 _family run_version_drift_selftests
 _family run_premodelswitch_guard_selftests
 _family run_research_lens_selftests
+_family run_command_role_parity_selftests
+# ── FORJA: o censo das 7 peças mede por REFERÊNCIA, e recusa quando não pode medir ───────────
+# Os casos (b)(c)(d) são os MUTANTES dos três erros que eu cometi levantando este censo à mão em
+# 2026-09-28 — prefixo duplicado, radical vs nome cheio, e padrão que não cobre a redação real.
+# Todos tinham a mesma forma: CONSTRUIR o caminho da peça a partir do nome do candidato. Se algum
+# deles voltar, o censo devolve número errado com cara de medição, que é o pior formato possível.
+run_forge_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/forge-census.sh"
+  if [ ! -f "${sut}" ]; then record_fail "forge" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  git -C "${d}" init -q -b main 2>/dev/null || { record_fail "forge" "git init falhou na sandbox"; return; }
+  mkdir -p "${d}/.claude/skills/onion-exemplo" "${d}/.claude/commands/common/prompts" \
+           "${d}/.claude/commands/meta" "${d}/.claude/rules" "${d}/.claude/workflows"
+  mkdir -p "${d}/.claude/validation"
+  # ⚠️ A SANDBOX PRECISA DO ARQUIVO QUE O SUT LÊ. O predicado da peça 7 confere que a família
+  #    CITADA existe de fato no runner do alvo (citação sem existência era o furo do fantasma), então
+  #    sem um `lint-selftest.sh` aqui a peça 7 seria sempre ausente — e eu perderia meia hora
+  #    achando defeito na guarda. bancada-espelha-o-runner: o harness entrega o que o motor lê.
+  printf 'run_exemplo_selftests() {\n  :\n}\n' > "${d}/.claude/validation/lint-selftest.sh"
+
+  _fg() { git -C "${d}" add -A >/dev/null 2>&1
+          if _fg_out="$(bash "${sut}" "${d}" --tsv 2>&1)"; then _fg_rc=0; else _fg_rc=$?; fi }
+  _fg_pecas() { printf '%s\n' "${_fg_out}" | awk -F'\t' -v c="$1" '$2==c{print $1; exit}'; }
+
+  # (a) superfície que CITA as 6 peças ⇒ 7/7. O nome do diretório (`onion-exemplo`) não bate com o
+  #     radical dos arquivos (`exemplo-*`), que é exatamente o 2o erro de 2026-09-28: se o censo
+  #     construísse o nome, daria menos que 7.
+  printf 'doutrina\n' > "${d}/.claude/commands/common/prompts/exemplo-doctrine.md"
+  printf 'lente\n'    > "${d}/.claude/rules/exemplo-lens.md"
+  printf 'wf\n'       > "${d}/.claude/workflows/exemplo.js"
+  cat > "${d}/.claude/skills/onion-exemplo/SKILL.md" <<'SK'
+# exemplo
+**Hoje:** !`date +%F`   <- diretiva de injecao, o que o harness EXECUTA na carga
+Doutrina: .claude/commands/common/prompts/exemplo-doctrine.md
+Workflow: .claude/workflows/exemplo.js
+Destino: write(KG) + kg-radar exit 0
+Lente: .claude/rules/exemplo-lens.md
+Bancada: run_exemplo_selftests
+SK
+  _fg
+  if [ "$(_fg_pecas onion-exemplo)" = "7" ]; then
+    record_pass "forge: (a) superfície que cita as 6 peças ⇒ 7/7, mesmo com nome do dir ≠ radical dos arquivos"
+  else
+    # ⚠️ ASSERÇÃO QUE NOMEIA A PEÇA, não só o total — achado 11 da passada adversarial: seis mutantes
+    #    distintos colapsavam no mesmo "esperado 7/7, veio 6" e o vermelho não dizia qual predicado
+    #    quebrou. Diagnóstico é parte do caso, não luxo.
+    local _l _faltou=""
+    _l="$(printf '%s\n' "${_fg_out}" | awk -F'\t' '$2=="onion-exemplo"{print}')"
+    local _i=0
+    for _nome in doutrina contexto workflow destino lente bancada; do
+      _i=$((_i + 1))
+      [ "$(printf '%s' "${_l}" | cut -f$((_i + 2)))" = "1" ] || _faltou="${_faltou} ${_nome}"
+    done
+    record_fail "forge: (a)" "esperado 7/7, veio $(_fg_pecas onion-exemplo) — peça(s) não detectada(s):${_faltou:- nenhuma (o total é que está errado)}"
+  fi
+
+  # (b) MUTANTE DO ERRO 1 — peça que EXISTE mas o artefato NÃO CITA conta como ausente.
+  #     É a cláusula 1 da doutrina, e é verdade operacional: a sessão também não a acharia.
+  mkdir -p "${d}/.claude/skills/onion-muda"
+  printf 'lente orfa\n' > "${d}/.claude/rules/muda-lens.md"
+  printf '# muda\nsó a superfície, não cita nada\n' > "${d}/.claude/skills/onion-muda/SKILL.md"
+  _fg
+  if [ "$(_fg_pecas onion-muda)" = "1" ]; then
+    record_pass "forge: (b) peça que existe e NÃO é citada conta como ausente (1/7) — cláusula 1"
+  else record_fail "forge: (b)" "esperado 1/7 p/ superfície muda, veio $(_fg_pecas onion-muda)"; fi
+
+  # (c) MUTANTE DO ERRO 3 — redação alternativa do destino ('radar exit 0' sem a palavra kg-radar),
+  #     que foi exatamente o que me fez contar a peça 5 do census como ausente.
+  mkdir -p "${d}/.claude/skills/onion-redacao"
+  printf '# redacao\nsela com radar exit 0 em todo grafo tocado\n' > "${d}/.claude/skills/onion-redacao/SKILL.md"
+  _fg
+  if [ "$(_fg_pecas onion-redacao)" = "2" ]; then
+    record_pass "forge: (c) 'radar exit 0' conta a peça 5 (a redação real do census, que meu grep perdeu)"
+  else record_fail "forge: (c)" "esperado 2/7, veio $(_fg_pecas onion-redacao)"; fi
+
+  # (d) sem índice git ⇒ rc=3 DECLARANDO. Censo é do conjunto RASTREADO; zero não é resultado.
+  local ng; ng="$(mktemp -d)"; mkdir -p "${ng}/.claude/commands/meta"
+  printf 'x\n' > "${ng}/.claude/commands/meta/x.md"
+  local og orc=0
+  if og="$(bash "${sut}" "${ng}" --tsv 2>&1)"; then orc=0; else orc=$?; fi
+  if [ "${orc}" = "3" ] && grep -q 'sem índice git' <<< "${og}"; then
+    record_pass "forge: (d) sem índice git ⇒ rc=3 DECLARANDO (nunca censo vazio)"
+  else record_fail "forge: (d)" "sem git não recusou (rc=${orc}): $(_emit "${og}" | head -c 200)"; fi
+  rm -rf "${ng}"
+
+  # (e) repo COM git mas ZERO candidato rastreado ⇒ rc=3, não censo de zero linhas.
+  local empty_repo; empty_repo="$(mktemp -d)"; git -C "${empty_repo}" init -q -b main 2>/dev/null
+  local ov vrc=0
+  if ov="$(bash "${sut}" "${empty_repo}" --tsv 2>&1)"; then vrc=0; else vrc=$?; fi
+  if [ "${vrc}" = "3" ] && grep -q 'nenhum candidato RASTREADO' <<< "${ov}"; then
+    record_pass "forge: (e) zero candidato rastreado ⇒ rc=3 DECLARANDO (censo vazio nunca passa por medição)"
+  else record_fail "forge: (e)" "repo sem candidato não recusou (rc=${vrc}): $(_emit "${ov}" | head -c 200)"; fi
+  rm -rf "${empty_repo}"
+
+  # (g) O CAMINHO DE PRODUÇÃO — `--markdown` é o que o forge.md manda rodar, e estava 100%
+  #     NÃO-TESTADO: a passada adversarial mostrou um mutante que fazia o cabeçalho MENTIR
+  #     (total e "N com 6+") com a família 6/6 verde. Classe testar-no-caminho-errado-e-nao-testar.
+  git -C "${d}" add -A >/dev/null 2>&1
+  local md; md="$(bash "${sut}" "${d}" --markdown 2>&1)"
+  local md_total md_ref tsv_total
+  md_total="$(printf '%s\n' "${md}" | sed -n 's/^# censo das 7 peças · \([0-9]\+\) candidato.*/\1/p')"
+  md_ref="$(printf '%s\n' "${md}" | sed -n 's/^# censo.*· \([0-9]\+\) com 6+.*/\1/p')"
+  tsv_total="$(bash "${sut}" "${d}" --tsv 2>/dev/null | tail -n +2 | grep -c . || true)"
+  # ⚠️ O "N com 6+" TAMBÉM é recomputado do TSV, não só checado como não-vazio: a 1a versão deste
+  #    caso fazia `[ -n "${md_ref}" ]` e o mutante que punha 99 ali passava VERDE — e é exatamente o
+  #    número que a doutrina e o nó do grafo citam. Guarda que aceita qualquer valor não guarda nada.
+  local tsv_ref
+  tsv_ref="$(bash "${sut}" "${d}" --tsv 2>/dev/null | tail -n +2 | awk -F'\t' '$1>=6' | grep -c . || true)"
+  if [ "${md_total}" = "${tsv_total}" ] && [ "${md_ref}" = "${tsv_ref}" ] \
+     && [ "$(printf '%s\n' "${md}" | grep -cE '^[0-9]/7 \| ')" -ge 1 ]; then
+    record_pass "forge: (g) --markdown (o caminho de produção) tem cabeçalho FIEL ao --tsv e tabela não-vazia"
+  else
+    record_fail "forge: (g)" "cabeçalho do markdown divergiu do tsv (total md=${md_total:-?} tsv=${tsv_total:-?} · 6+ md=${md_ref:-?} tsv=${tsv_ref:-?}) ou tabela vazia"
+  fi
+
+  # (h) A DESCOBERTA POR `commands/meta/` — metade do censo, e também não-testada: matar essa
+  #     varredura derrubava 44 de 57 candidatos no repo real sem a bancada mudar de cor.
+  mkdir -p "${d}/.claude/commands/meta"
+  printf '# so-comando\nnada citado\n' > "${d}/.claude/commands/meta/so-comando.md"
+  _fg
+  if [ "$(_fg_pecas so-comando)" = "1" ]; then
+    record_pass "forge: (h) candidato SÓ em commands/meta/ é descoberto (a outra metade da varredura)"
+  else record_fail "forge: (h)" "candidato de commands/meta/ não apareceu no censo"; fi
+
+  # (i) CITADO MAS INEXISTENTE ⇒ ausente. O furo que a passada adversarial abriu: um .md que só
+  #     citava caminhos fantasma pontuava 7/7, enquanto o docstring prometia medir PRESENÇA.
+  mkdir -p "${d}/.claude/skills/onion-fantasma"
+  cat > "${d}/.claude/skills/onion-fantasma/SKILL.md" <<'SKF'
+# fantasma
+Doutrina: .claude/commands/common/prompts/fantasma-doctrine.md
+Workflow: .claude/workflows/fantasma.js
+Lente: .claude/rules/fantasma-lens.md
+Bancada: run_fantasma_selftests
+SKF
+  _fg
+  if [ "$(_fg_pecas onion-fantasma)" = "1" ]; then
+    record_pass "forge: (i) peça CITADA mas inexistente no índice ⇒ ausente (o fantasma 7/7 morreu)"
+  else record_fail "forge: (i)" "fantasma pontuou $(_fg_pecas onion-fantasma)/7 — citação sem existência voltou a contar"; fi
+
+  # (f) a superfície NÃO-rastreada não entra no censo (o censo é do que viaja e do que o CI vê).
+  mkdir -p "${d}/.claude/skills/onion-untracked"
+  printf '# untracked\n' > "${d}/.claude/skills/onion-untracked/SKILL.md"
+  git -C "${d}" add -A >/dev/null 2>&1
+  git -C "${d}" rm --cached -q -- .claude/skills/onion-untracked/SKILL.md >/dev/null 2>&1
+  if _fg_out="$(bash "${sut}" "${d}" --tsv 2>&1)"; then :; fi
+  if ! grep -q 'onion-untracked' <<< "${_fg_out}"; then
+    record_pass "forge: (f) superfície untracked fica FORA do censo (mede o que viaja)"
+  else record_fail "forge: (f)" "candidato untracked entrou no censo"; fi
+}
+
+# ── PARIDADE ENTRE OS DOIS RAMOS de `_rule_glob_matches` (git × não-git) ──────────────────────
+# POR QUE EXISTE, e a razão é um erro MEU de 2026-09-29: o helper tem ramo git (pathspec) e ramo
+# NÃO-GIT (`find`), e eu curei a semântica de glob em UM só. A sandbox de fixtures é montada com
+# `tar` (sem `.git`), então a única cobertura ponta-a-ponta que havia exercitava justamente o ramo
+# intacto — as fixtures reprovaram e me mostraram. Sem esta família, a paridade depende de eu
+# escrever as duas semânticas nos dois lugares, que é disciplina, e disciplina não escala.
+# O ORÁCULO NÃO É UMA RÉGUA EXTERNA, é a CONCORDÂNCIA: os mesmos globs nos dois substratos têm de
+# dar o MESMO veredito. Assim o caso não caduca quando a semântica do harness mudar — ele só cobra
+# que as duas metades andem juntas.
+run_glob_branch_parity_selftests() {
+  local lint="${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_fail "glob-parity" "SUT ausente: ${lint}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+
+  # Árvore mínima IDÊNTICA nos dois substratos: um com git, um sem.
+  local g="${d}/comgit" n="${d}/semgit" sub
+  for sub in "${g}" "${n}"; do
+    mkdir -p "${sub}/docs/raso" "${sub}/docs/fundo/nivel" "${sub}/docs/alt-a" "${sub}/docs/alt-b"
+    printf 'x\n' > "${sub}/docs/raso/direto.md"          # casa em UM nível
+    printf 'x\n' > "${sub}/docs/fundo/nivel/longe.md"    # só casa descendo
+    printf 'x\n' > "${sub}/docs/alt-b/achado.md"         # só a 2a alternativa da brace existe
+  done
+  git -C "${g}" init -q -b main 2>/dev/null && git -C "${g}" add -A >/dev/null 2>&1 \
+    || { record_fail "glob-parity" "git init/add falhou na sandbox com git"; return; }
+
+  # ⚠️ Extrai os helpers do arquivo VIVO — não uma cópia que eu digite, que é como se mede o SUT e
+  #    não uma versão vizinha dele ([[bancada-espelha-o-runner]]).
+  local h="${d}/helpers.sh"
+  awk '/^_expand_braces\(\) \{/{f=1} f{print} f&&/^\}$/{exit}'       "${lint}" >  "${h}"
+  awk '/^_glob_literal_prefix\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "${lint}" >> "${h}"
+  awk '/^_rule_glob_matches\(\) \{/{f=1} f{print} f&&/^\}$/{exit}'   "${lint}" >> "${h}"
+  if ! grep -q '_rule_glob_matches' "${h}"; then
+    record_fail "glob-parity" "não consegui extrair os helpers do lint — o caso não pode julgar"; return
+  fi
+
+  _veredito() { # $1=REPO_ROOT a usar  $2=glob → imprime CASA|NAO
+    REPO_ROOT="$1" bash -c '. "'"${h}"'"; REPO_ROOT="'"$1"'"; if _rule_glob_matches "'"$2"'"; then echo CASA; else echo NAO; fi' 2>/dev/null
+  }
+
+  local globs=(
+    'docs/raso/*.md'            # vivo em um nível — os dois devem dizer CASA
+    'docs/fundo/*.md'           # MORTO pela semântica do harness (o `*` não cruza `/`)
+    'docs/fundo/**/*.md'        # vivo descendo
+    'docs/{alt-a,alt-b}/**'     # brace simples, viva pela 2a alternativa
+    'docs/{alt-a,{alt-b,alt-c}}/**'  # brace ANINHADA, viva
+    'docs/{alt-a/nada.md,alt-b/achado.md}'  # brace com `/` dentro, viva
+    'docs/{nada,tampouco}/**'   # brace MORTA: nenhuma alternativa casa
+    'docs/inexistente/*.md'     # morto trivial
+  )
+  local gl vg vn divergiu=0 detalhe=""
+  for gl in "${globs[@]}"; do
+    vg="$(_veredito "${g}" "${gl}")"; vn="$(_veredito "${n}" "${gl}")"
+    if [ -z "${vg}" ] || [ -z "${vn}" ]; then
+      record_fail "glob-parity" "veredito VAZIO para '${gl}' (git=${vg:-?} nao-git=${vn:-?}) — não julgo sem leitura"; return
+    fi
+    [ "${vg}" = "${vn}" ] || { divergiu=$((divergiu+1)); detalhe="${detalhe} ${gl}[git=${vg} nogit=${vn}]"; }
+  done
+  if [ "${divergiu}" -eq 0 ]; then
+    record_pass "glob-parity: (a) os ${#globs[@]} globs dão veredito IDÊNTICO no ramo git e no não-git"
+  else
+    record_fail "glob-parity: (a)" "${divergiu} glob(s) com veredito DIVERGENTE entre os ramos —${detalhe}. Curar um ramo só foi o erro de 2026-09-29; esta família existe para pegá-lo."
+  fi
+}
+
+_family run_forge_selftests
+# ── PARIDADE registro × CARIMBO das portas (REGRA 92) ────────────────────────────────────────
+# POR QUE EXISTE: em 2026-09-30 o `members.yaml` dizia `role: standalone` para a `onion-core`
+# enquanto o carimbo dela dizia `hub` (11 materializações seguidas). Eu li o registro, materializei
+# com o papel errado, e a porta PÚBLICA perdeu 85 arquivos de meta-fábrica. Nada cobrava que as duas
+# fontes concordassem. Esta família cobra — e o caso (b) é o defeito daquele dia, reconstituído.
+run_door_role_parity_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/door-role-parity-check.sh"
+  if [ ! -f "${sut}" ]; then record_fail "door-role-parity" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  mkdir -p "${d}/docs/evolution/federation" "${d}/porta/.claude"
+
+  _drp() { # $1=role no registro  $2=role no carimbo ('' = sem campo)  $3=path ('' = ausente)
+    printf 'role: %s\n' "$2" > "${d}/porta/.claude/.onion-version"
+    [ -n "$2" ] || printf 'framework: x\n' > "${d}/porta/.claude/.onion-version"
+    { echo 'members:'; echo '  - id: porta-de-teste'; echo '    kind: door'
+      [ -n "$1" ] && echo "    role: $1"
+      [ -n "$3" ] && echo "    local_path: \"$3\"" ; } > "${d}/docs/evolution/federation/members.yaml"
+    if _drp_out="$(bash "${sut}" "${d}" 2>&1)"; then _drp_rc=0; else _drp_rc=$?; fi
+  }
+
+  # (a) registro e carimbo CONCORDAM ⇒ rc=0, sem achado
+  _drp standalone standalone "${d}/porta"
+  if [ "${_drp_rc}" = "0" ] && ! grep -q 'DIVERGE' <<< "${_drp_out}"; then
+    record_pass "door-role-parity: (a) registro == carimbo ⇒ rc=0"
+  else record_fail "door-role-parity: (a)" "acusou porta consistente (rc=${_drp_rc}): $(_emit "${_drp_out}" | head -c 200)"; fi
+
+  # (b) O DEFEITO DE 2026-09-30: registro `standalone`, carimbo `hub` ⇒ ACUSA nomeando os dois
+  _drp standalone hub "${d}/porta"
+  if [ "${_drp_rc}" = "1" ] && grep -q 'registro diz `standalone`, carimbo diz `hub`' <<< "${_drp_out}"; then
+    record_pass "door-role-parity: (b) registro standalone × carimbo hub ⇒ ACUSA nomeando os dois (o defeito de 2026-09-30)"
+  else record_fail "door-role-parity: (b)" "a divergência que custou 85 arquivos passou (rc=${_drp_rc}): $(_emit "${_drp_out}" | head -c 200)"; fi
+
+  # (c) porta SEM `role:` no registro ⇒ lacuna acusada (o materializador aceitaria qualquer --role)
+  _drp '' hub "${d}/porta"
+  if [ "${_drp_rc}" = "1" ] && grep -q 'não declara' <<< "${_drp_out}"; then
+    record_pass "door-role-parity: (c) porta sem role: no registro ⇒ ACUSA a lacuna"
+  else record_fail "door-role-parity: (c)" "porta sem role passou (rc=${_drp_rc})"; fi
+
+  # (d) carimbo SEM campo `role:` ⇒ acusa carimbo incompleto
+  _drp standalone '' "${d}/porta"
+  if [ "${_drp_rc}" = "1" ] && grep -q 'carimbo incompleto' <<< "${_drp_out}"; then
+    record_pass "door-role-parity: (d) carimbo sem campo role ⇒ ACUSA carimbo incompleto"
+  else record_fail "door-role-parity: (d)" "carimbo incompleto passou (rc=${_drp_rc})"; fi
+
+  # (e) clone INALCANÇÁVEL (o caso do CI) ⇒ rc=0 e DECLARA não-medido; silêncio aqui seria fail-open
+  _drp standalone hub "${d}/nao-existe"
+  if [ "${_drp_rc}" = "0" ] && grep -q 'NÃO MEDIDA' <<< "${_drp_out}"; then
+    record_pass "door-role-parity: (e) clone inalcançável ⇒ rc=0 DECLARANDO não-medido (o caso do CI)"
+  else record_fail "door-role-parity: (e)" "clone ausente não declarou (rc=${_drp_rc}): $(_emit "${_drp_out}" | head -c 200)"; fi
+
+  # (f) members.yaml AUSENTE ⇒ rc=3, recusa julgar
+  local empty_repo; empty_repo="$(mktemp -d)"
+  local ov orc=0
+  if ov="$(bash "${sut}" "${empty_repo}" 2>&1)"; then orc=0; else orc=$?; fi
+  if [ "${orc}" = "3" ] && grep -q 'members.yaml ausente' <<< "${ov}"; then
+    record_pass "door-role-parity: (f) members.yaml ausente ⇒ rc=3 (recusa, não 'sem divergência')"
+  else record_fail "door-role-parity: (f)" "sem registro não recusou (rc=${orc})"; fi
+  rm -rf "${empty_repo}"
+
+  # (g) FRONTEIRA: `kind: adopter` com registro `standalone` e carimbo `adopted` NÃO é divergência —
+  # no adotante os dois campos respondem perguntas diferentes (tier na rede × relação com o framework),
+  # como uma entrada `kind: adopter` do members.yaml explica no próprio comentário. Sem este caso, a guarda
+  # poderia ser "melhorada" para varrer todo membro e passaria a acusar em massa o que é correto.
+  printf 'role: adopted\n' > "${d}/porta/.claude/.onion-version"
+  { echo 'members:'; echo '  - id: adotante-de-teste'; echo '    kind: adopter'
+    echo '    role: standalone'; echo "    local_path: \"${d}/porta\"" ; } > "${d}/docs/evolution/federation/members.yaml"
+  local arc=0 aout
+  if aout="$(bash "${sut}" "${d}" 2>&1)"; then arc=0; else arc=$?; fi
+  if [ "${arc}" = "0" ] && ! grep -q 'DIVERGE' <<< "${aout}"; then
+    record_pass "door-role-parity: (g) kind adopter standalone×adopted NÃO é divergência (fronteira semântica)"
+  else record_fail "door-role-parity: (g)" "acusou adotante, onde os dois campos respondem perguntas diferentes (rc=${arc}): $(_emit "${aout}" | head -c 200)"; fi
+
+  # (h) YAML LEGAL com ASPAS não pode cegar a guarda. A 1ª versão lia por regex: `kind: "door"` fazia a
+  # porta DESAPARECER — e a guarda então AFIRMAVA "nenhuma porta no registro", que é pior que um erro,
+  # é uma afirmação falsa. Achado de passada adversarial, 2026-09-30.
+  printf 'role: hub\n' > "${d}/porta/.claude/.onion-version"
+  { echo 'members:'; echo '  - id: porta-de-teste'; echo '    kind: "door"'; echo '    role: "standalone"'
+    echo "    local_path: \"${d}/porta\"" ; } > "${d}/docs/evolution/federation/members.yaml"
+  local qrc=0 qout
+  if qout="$(bash "${sut}" "${d}" 2>&1)"; then qrc=0; else qrc=$?; fi
+  if [ "${qrc}" = "1" ] && grep -q 'PAPEL-DIVERGE' <<< "${qout}"; then
+    record_pass "door-role-parity: (h) kind/role com ASPAS continua sendo lido (não 'nenhuma porta')"
+  else record_fail "door-role-parity: (h)" "aspas cegaram a guarda (rc=${qrc}): $(_emit "${qout}" | head -c 200)"; fi
+
+  # (i) `role:` ANINHADO em `trust:` não é o papel da porta. `\s` casa `\n`, então a regex antiga
+  # atravessava linhas e comparava o campo errado. Todo membro real tem bloco `trust:`.
+  printf 'role: hub\n' > "${d}/porta/.claude/.onion-version"
+  { echo 'members:'; echo '  - id: porta-de-teste'; echo '    kind: door'; echo '    role: hub'
+    echo "    local_path: \"${d}/porta\""; echo '    trust:'; echo '      role: consumer' ; } > "${d}/docs/evolution/federation/members.yaml"
+  local nrc=0 nout
+  if nout="$(bash "${sut}" "${d}" 2>&1)"; then nrc=0; else nrc=$?; fi
+  if [ "${nrc}" = "0" ] && ! grep -q 'DIVERGE' <<< "${nout}"; then
+    record_pass "door-role-parity: (i) role aninhado em trust: não é lido como o papel da porta"
+  else record_fail "door-role-parity: (i)" "leu o role de dentro do trust (rc=${nrc}): $(_emit "${nout}" | head -c 200)"; fi
+
+  # (j) COMENTÁRIO INLINE no carimbo (`role: hub   # carimbado por ...`) não é parte do valor.
+  printf 'role: hub   # carimbado por ops/materialize-door.sh\n' > "${d}/porta/.claude/.onion-version"
+  { echo 'members:'; echo '  - id: porta-de-teste'; echo '    kind: door'; echo '    role: hub'
+    echo "    local_path: \"${d}/porta\"" ; } > "${d}/docs/evolution/federation/members.yaml"
+  local crc=0 cout
+  if cout="$(bash "${sut}" "${d}" 2>&1)"; then crc=0; else crc=$?; fi
+  if [ "${crc}" = "0" ] && ! grep -q 'DIVERGE' <<< "${cout}"; then
+    record_pass "door-role-parity: (j) comentário inline no carimbo não entra no valor"
+  else record_fail "door-role-parity: (j)" "comentário inline virou falso DIVERGE (rc=${crc}): $(_emit "${cout}" | head -c 200)"; fi
+
+  # (k) CLONE presente e CARIMBO ausente é estado PRÓPRIO, não "o caso do CI": sem carimbo a porta se
+  # declara a FONTE e todo guard de adotante desliga. Sem este caso o mutante `-f`→`-d` SOBREVIVIA,
+  # porque nenhum caso variava a FORMA do local_path — buraco apontado pela passada adversarial.
+  rm -f "${d}/porta/.claude/.onion-version"
+  { echo 'members:'; echo '  - id: porta-de-teste'; echo '    kind: door'; echo '    role: hub'
+    echo "    local_path: \"${d}/porta\"" ; } > "${d}/docs/evolution/federation/members.yaml"
+  local krc=0 kout
+  if kout="$(bash "${sut}" "${d}" 2>&1)"; then krc=0; else krc=$?; fi
+  if [ "${krc}" = "1" ] && grep -q 'CARIMBO-AUSENTE' <<< "${kout}"; then
+    record_pass "door-role-parity: (k) clone SEM carimbo ⇒ ACUSA (porta quebrada), não 'não-medido do CI'"
+  else record_fail "door-role-parity: (k)" "clone sem carimbo tratado como caso de CI (rc=${krc}): $(_emit "${kout}" | head -c 200)"; fi
+}
+
+# ── A RECUSA de troca de papel DENTRO do materializador (a 1ª linha de defesa) ────────────────
+# POR QUE EXISTE: a REGRA 92 é lint de PR no core, e o dano de 2026-09-30 não passou por PR nenhum —
+# passou por um operador rodando `ops/materialize-door.sh <clone> --role standalone` com o registro
+# errado na mão. A passada adversarial mediu que este script NUNCA lê o members.yaml e que `ROLE` é
+# argumento com default `hub`: nenhum lint fica entre o operador e o comando. Só o próprio script
+# pode recusar, e é isso que estes casos cobram.
+run_door_role_change_refusal_selftests() {
+  local sut="${REPO_ROOT}/ops/materialize-door.sh"
+  if [ ! -f "${sut}" ]; then record_fail "door-role-change" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  mkdir -p "${d}/porta/.claude"
+
+  # (a) O DEFEITO DE 2026-09-30: --role contradiz o carimbo ⇒ RECUSA (rc=2) nomeando os dois papéis
+  printf 'framework: x\nrole: hub\n' > "${d}/porta/.claude/.onion-version"
+  local rrc=0 rout
+  if rout="$(bash "${sut}" "${d}/porta" --role standalone 2>&1)"; then rrc=0; else rrc=$?; fi
+  if [ "${rrc}" = "2" ] && grep -q "CONTRADIZ o carimbo" <<< "${rout}" \
+     && grep -q "force-role-change" <<< "${rout}"; then
+    record_pass "door-role-change: (a) --role contra o carimbo ⇒ RECUSA rc=2 ensinando as duas saídas"
+  else record_fail "door-role-change: (a)" "materializou por cima do carimbo divergente (rc=${rrc}): $(_emit "${rout}" | head -c 200)"; fi
+
+  # (b) A recusa não pode virar MURO: com --force-role-change a troca deliberada passa da guarda.
+  local frc=0 fout
+  if fout="$(bash "${sut}" "${d}/porta" --role standalone --force-role-change 2>&1)"; then frc=0; else frc=$?; fi
+  if ! grep -q "CONTRADIZ o carimbo" <<< "${fout}"; then
+    record_pass "door-role-change: (b) --force-role-change libera a troca DELIBERADA (recusa não é muro)"
+  else record_fail "door-role-change: (b)" "a flag explícita não liberou — guarda virou muro"; fi
+
+  # (c) Carimbo AUSENTE (porta nova) não pode ser barrado: não há papel anterior a contradizer.
+  local d2; d2="$(mktemp -d)"
+  local nrc=0 nout
+  if nout="$(bash "${sut}" "${d2}/nova" --role standalone 2>&1)"; then nrc=0; else nrc=$?; fi
+  if ! grep -q "CONTRADIZ o carimbo" <<< "${nout}"; then
+    record_pass "door-role-change: (c) porta NOVA (sem carimbo) não é barrada pela recusa"
+  else record_fail "door-role-change: (c)" "barrou porta nova, que não tem papel anterior"; fi
+  rm -rf "${d2}"
+
+  # (d) Carimbo CONCORDANDO com o --role passa reto (o caso comum: re-materializar como ela é)
+  printf 'framework: x\nrole: hub\n' > "${d}/porta/.claude/.onion-version"
+  local src=0 sout
+  if sout="$(bash "${sut}" "${d}/porta" --role hub 2>&1)"; then src=0; else src=$?; fi
+  if ! grep -q "CONTRADIZ o carimbo" <<< "${sout}"; then
+    record_pass "door-role-change: (d) --role igual ao carimbo passa reto (re-materializar como ela é)"
+  else record_fail "door-role-change: (d)" "barrou o caso comum, onde os dois concordam"; fi
+}
+
+_family run_glob_branch_parity_selftests
+
+# ── REGRA 93: KB de terceiro declara a QUE VERSÃO se aplica ───────────────────────────────────
+# POR QUE EXISTE: "documentações devem seguir versões" (maestro, 2026-09-30, campo e escopo selados
+# por ele). O caso (c) é o coração da guarda e nasceu de um defeito REAL: uma passada adversarial
+# provou que carimbo escrito FORA do bloco `---` é prosa — o extrator do gate devolve vazio e o
+# carimbo fica invisível. Uma guarda que exigisse só o campo passaria esse caso, que é fail-open.
+run_kb_applies_to_selftests() {
+  # Os dois artefatos que esta família cobre, NOMEADOS para que o mapa `--affected-staged` os
+  # reivindique. Sem esta linha o harness não sabe de quem é o baseline e RECUSA NO INCERTO — roda as
+  # 198 famílias inteiras (medido em 2026-09-30, na estreia desta família). Recusar no incerto é o
+  # comportamento certo dele; nomear é a obrigação de quem escreve a família.
+  local sut="${REPO_ROOT}/.claude/validation/kb-applies-to-check.sh"
+  # ⚠️ O baseline é referenciado AQUI, em CÓDIGO e com ${REPO_ROOT}, porque é assim que o
+  # `_selftest_family_map` o reivindica — ele deriva o mapa do corpo da família por esse padrão, e
+  # NÃO lê comentários. Na 1ª versão desta família eu o declarei em comentário e o harness recusou no
+  # incerto, rodando as 198 famílias. A variável não precisa ser usada: a menção é o contrato do mapa.
+  local _covers_baseline="${REPO_ROOT}/.claude/validation/kb-applies-to-baseline.txt"; : "${_covers_baseline}"
+  if [ ! -f "${sut}" ]; then record_fail "kb-applies-to" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  mkdir -p "${d}/docs/knowledge-base/tools" "${d}/docs/knowledge-base/platforms" "${d}/.claude/validation"
+
+  _kb() { printf '%s\n' "$2" > "${d}/docs/knowledge-base/tools/$1"; }
+  _run() { if _kb_out="$(bash "${sut}" "${d}" 2>&1)"; then _kb_rc=0; else _kb_rc=$?; fi; }
+
+  # (a) frontmatter com applies_to ⇒ silêncio
+  _kb ok.md '---
+versao: 1.0.0
+applies_to: "Produto 3.2.1"
+---
+
+# KB de exemplo'
+  _run
+  if [ "${_kb_rc}" = "0" ] && ! grep -q 'SEM-' <<< "${_kb_out}"; then
+    record_pass "kb-applies-to: (a) frontmatter com applies_to ⇒ silêncio"
+  else record_fail "kb-applies-to: (a)" "acusou KB conforme (rc=${_kb_rc}): $(_emit "${_kb_out}" | head -c 180)"; fi
+
+  # (b) frontmatter SEM o campo ⇒ ACUSA
+  _kb ok.md '---
+versao: 1.0.0
+---
+
+# KB sem o campo'
+  _run
+  if [ "${_kb_rc}" = "1" ] && grep -q 'SEM-CAMPO' <<< "${_kb_out}"; then
+    record_pass "kb-applies-to: (b) frontmatter sem applies_to ⇒ ACUSA"
+  else record_fail "kb-applies-to: (b)" "KB sem o campo passou (rc=${_kb_rc})"; fi
+
+  # (c) O CORAÇÃO: campo presente mas FORA do bloco `---` ⇒ ACUSA, porque o gate não o lê.
+  # Este é o defeito que a passada adversarial de 2026-09-30 achou numa KB real.
+  _kb ok.md '# KB com metadado solto
+
+applies_to: "Produto 3.2.1"
+verified_at: 2026-09-30
+
+corpo'
+  _run
+  if [ "${_kb_rc}" = "1" ] && grep -q 'SEM-FRONTMATTER' <<< "${_kb_out}"; then
+    record_pass "kb-applies-to: (c) campo FORA do bloco --- ⇒ ACUSA (carimbo invisível ao gate é fail-open)"
+  else record_fail "kb-applies-to: (c)" "campo solto passou como cumprido (rc=${_kb_rc}) — a guarda virou fail-open: $(_emit "${_kb_out}" | head -c 180)"; fi
+
+  # (d) baseline ISENTA, e o passivo é DECLARADO em voz alta (silêncio seria a catraca mentindo)
+  printf '# isenções\ndocs/knowledge-base/tools/ok.md   # razão escrita\n' > "${d}/.claude/validation/kb-applies-to-baseline.txt"
+  _run
+  if [ "${_kb_rc}" = "0" ] && grep -q 'PASSIVO' <<< "${_kb_out}" && ! grep -q 'SEM-' <<< "${_kb_out}"; then
+    record_pass "kb-applies-to: (d) baseline isenta E declara o passivo (catraca não fica muda)"
+  else record_fail "kb-applies-to: (d)" "baseline não isentou ou não declarou (rc=${_kb_rc}): $(_emit "${_kb_out}" | head -c 180)"; fi
+
+  # (e) FRONTEIRA: KB fora de tools/platforms NÃO é cobrada (escopo selado; por-forma foi rejeitado)
+  rm -f "${d}/docs/knowledge-base/tools/ok.md" "${d}/.claude/validation/kb-applies-to-baseline.txt"
+  mkdir -p "${d}/docs/knowledge-base/concepts"
+  printf '# conceito sem versão\n\ncorpo citando v1.2.3 de passagem\n' > "${d}/docs/knowledge-base/concepts/x.md"
+  _run
+  if [ "${_kb_rc}" = "0" ] && ! grep -q 'SEM-' <<< "${_kb_out}"; then
+    record_pass "kb-applies-to: (e) KB fora de tools/platforms não é cobrada (escopo selado)"
+  else record_fail "kb-applies-to: (e)" "cobrou fora do escopo (rc=${_kb_rc}) — 55 de 109 KBs citam versão de passagem"; fi
+
+  # (f) docs/knowledge-base AUSENTE ⇒ rc=3 (recusa, nunca 'conforme')
+  # (g) O STDOUT DO MODO --emit-baseline É O ARQUIVO — e por isso não pode carregar achado.
+  # Medido em 2026-09-30 num hub real: este emissor escrevia o baseline por conta própria enquanto o
+  # `regen-baselines.sh` (mecanismo GENÉRICO, que varre todos) faz `bash <emissor> --emit-baseline >
+  # <baseline>`. As duas escritas colidiram, a do regen ganhou, e o baseline do adotante nasceu com as
+  # MENSAGENS DE ACHADO em vez de caminhos. Baseline que não casa com nada não tolera nada: as KBs
+  # legítimas e pré-existentes dele viraram HARD e o gate recém-instalado bloqueou o repo por dívida
+  # que não era dele. O emissor saiu `exit 0` e produziu lixo — a classe `exit 0 é declaração`.
+  local _eb; _eb="$(mktemp -d)"; mkdir -p "${_eb}/docs/knowledge-base/tools" "${_eb}/.claude/validation"
+  printf '# sem frontmatter\n' > "${_eb}/docs/knowledge-base/tools/a.md"
+  local _out _err _n_path _n_prosa
+  _out="$(bash "${sut}" "${_eb}" --emit-baseline 2>/dev/null)"
+  _n_prosa="$(grep -c 'REGRA 93:' <<< "${_out}" || true)"
+  _n_path="$(grep -c '^docs/knowledge-base/' <<< "${_out}" || true)"
+  if [ "${_n_prosa}" = "0" ] && [ "${_n_path}" -ge 1 ]; then
+    record_pass "kb-applies-to: (g) --emit-baseline põe CAMINHOS no stdout e nenhum achado (o stdout É o baseline)"
+  else record_fail "kb-applies-to: (g)" "o stdout do --emit-baseline traz ${_n_prosa} linha(s) de achado e ${_n_path} caminho(s) — o regen-baselines.sh redireciona este stdout PARA o baseline, então achado ali vira baseline que não casa com nada"; fi
+  # (h) e o baseline emitido tem de TOLERAR na varredura seguinte — senão ele é decorativo
+  printf '%s\n' "${_out}" > "${_eb}/.claude/validation/kb-applies-to-baseline.txt"
+  local _rc2=0; bash "${sut}" "${_eb}" >/dev/null 2>&1 || _rc2=$?
+  if [ "${_rc2}" = "0" ]; then
+    record_pass "kb-applies-to: (h) o baseline emitido TOLERA na varredura seguinte (rc=0)"
+  else record_fail "kb-applies-to: (h)" "emitiu o baseline e a varredura seguinte ainda acusa (rc=${_rc2}) — emissor e leitor discordam sobre a forma da chave"; fi
+  rm -rf "${_eb}"
+
+  local empty_repo; empty_repo="$(mktemp -d)"
+  local erc=0
+  if bash "${sut}" "${empty_repo}" >/dev/null 2>&1; then erc=0; else erc=$?; fi
+  if [ "${erc}" = "3" ]; then
+    record_pass "kb-applies-to: (f) sem docs/knowledge-base ⇒ rc=3 (recusa, não conformidade por ausência)"
+  else record_fail "kb-applies-to: (f)" "sem corpus não recusou (rc=${erc})"; fi
+  rm -rf "${empty_repo}"
+}
+
+_family run_door_role_parity_selftests
+
+# ── ADAPTER ZOHO PROJECTS: os achados medidos não podem se perder na prosa ────────────────────
+# POR QUE EXISTE: o adapter foi escrito a partir de DUAS sondas de escrita em portal real
+# (2026-09-30), e três dos achados são da classe "a API devolve 200 e não faz o que você pediu".
+# Se o documento perder essas linhas, o próximo a implementar repete o erro — e o erro passa em
+# teste de status HTTP. Esta família cobra que os achados continuem escritos.
+run_zoho_adapter_selftests() {
+  local ad="${REPO_ROOT}/.claude/utils/task-manager/adapters/zoho.md"
+  local iface="${REPO_ROOT}/.claude/utils/task-manager/interface.md"
+  local fac="${REPO_ROOT}/.claude/utils/task-manager/factory.md"
+  local det="${REPO_ROOT}/.claude/utils/task-manager/detector.md"
+  local types="${REPO_ROOT}/.claude/utils/task-manager/types.md"
+  local envex="${REPO_ROOT}/.env.example"
+  local base_j="${REPO_ROOT}/.claude/validation/zoho-parity-exceptions.txt"; : "${base_j}"
+  if [ ! -f "${ad}" ]; then record_fail "zoho-adapter" "SUT ausente: ${ad}"; return; fi
+
+  # `_zoho_sec <regex-do-header>` devolve a seção `### …` do adapter, SEM espaços. Existe porque a
+  # bancada anterior grepava o arquivo INTEIRO: a regra em prosa da §1 cita as formas corretas, então
+  # um mutante que corrompia só o EXEMPLO da seção sobrevivia — o documento passava a se contradizer
+  # e a guarda não via. Medido por mutação em 2026-09-30 (M6 e M9 sobreviveram assim).
+  _zoho_sec() { awk -v re="$1" '$0 ~ "^### " && $0 ~ re {f=1; next} f && /^### / {exit} f {print}' "${ad}" | tr -d ' \t'; }
+
+  # A FORMA COMPACTA do documento: as asserções de JSON comparam SEM espaço, senão `{ "a": { "b"` e
+  # `{"a":{"b"` seriam achados diferentes e a guarda dependeria de como alguém formatou a linha.
+  local _flat; _flat="$(tr -d ' \t' < "${ad}")"
+
+  # (a) PARIDADE com a interface — a lista sai de interface.md, nunca digitada aqui.
+  # DUAS correções de 2026-09-30, as duas achadas por mutação:
+  #   · o regex antigo `^  [a-zA-Z]+\(` pegava 14 de 16 — `provider` e `isConfigured` são `readonly`
+  #     (sem parênteses) e escapavam; remover `isConfigured` do adapter passava no gate.
+  #   · o match era `grep -qF "<membro>"`, e `getProject` casa DENTRO de `getProjectList` — remover
+  #     a seção inteira de `getProject` também passava. O `(` no padrão desfaz a colisão.
+  local _absent="" _m
+  while IFS= read -r _m; do
+    [ -n "${_m}" ] || continue
+    grep -qF "${_m}(" "${ad}" || _absent="${_absent}${_m} "
+  done < <(grep -oE '^  [a-zA-Z]+\(' "${iface}" | tr -d ' (' | sort -u)
+  while IFS= read -r _m; do
+    [ -n "${_m}" ] || continue
+    grep -qF "${_m}" "${ad}" || _absent="${_absent}${_m}(readonly) "
+  done < <(grep -oE '^  readonly [a-zA-Z]+' "${iface}" | awk '{print $2}' | sort -u)
+  if [ -z "${_absent}" ]; then
+    record_pass "zoho-adapter: (a) PARIDADE — os 16 membros de interface.md (14 métodos + 2 readonly) aparecem no adapter"
+  else record_fail "zoho-adapter: (a)" "membros da interface ausentes no adapter: ${_absent}"; fi
+
+  # (a2) `isConfigured` não é só um NOME na paridade: é o membro que decide o fallback gracioso.
+  # Medido por mutação: corromper a DEFINIÇÃO dele (mantendo o header) passava pela paridade, porque
+  # paridade vê nome, não semântica. Este caso cobra que a definição nomeie as três variáveis
+  # obrigatórias — sem elas o fallback avisa a variável errada, ou não avisa.
+  local _sec_cfg; _sec_cfg="$(_zoho_sec 'isConfigured')"
+  local _cfg_missing="" _var
+  for _var in ZOHO_CLIENT_ID ZOHO_CLIENT_SECRET ZOHO_PORTAL_ID; do
+    grep -qF "${_var}" <<< "${_sec_cfg}" || _cfg_missing="${_cfg_missing}${_var} "
+  done
+  if [ -z "${_cfg_missing}" ]; then
+    record_pass "zoho-adapter: (a2) isConfigured nomeia as três variáveis obrigatórias (o fallback gracioso depende disso)"
+  else record_fail "zoho-adapter: (a2)" "a definição de isConfigured não cita: ${_cfg_missing}— o fallback avisaria a variável errada"; fi
+
+  # ── TETO DECLARADO desta família (2026-09-30, ao fim da rodada de mutação) ───────────────
+  # 8 dos 9 mutantes do refutador morrem; o que sobrevive corrompe um EXEMPLO DE RESPOSTA fora da
+  # seção que decide (trocar `"status": {"id"` por `custom_status` dentro do exemplo do `getTask`).
+  # NÃO vou estender a lista por exemplo: a partir daqui cada caso novo cobre um trecho a mais do
+  # mesmo documento, que é força-de-guarda, não achado de produto. GATILHO para voltar: alguém
+  # implementar contra um exemplo de resposta e errar em uso real. A guarda de verdade contra isso
+  # já existe e é outra — a §2 do adapter, que manda não confiar na forma de um único exemplo.
+
+  # (b) o achado mais perigoso: vínculo por objeto aninhado, e o *_id é ignorado em SILÊNCIO
+  if grep -qF '{"milestone":{"id"' <<< "${_flat}" && grep -qiE 'ignorad' "${ad}"; then
+    record_pass "zoho-adapter: (b) o vínculo por objeto aninhado e o silêncio do *_id estão escritos"
+  else record_fail "zoho-adapter: (b)" "o adapter não diz que o vínculo é objeto aninhado e que *_id é aceito e IGNORADO — é o achado que passa em teste de HTTP 200"; fi
+
+  # ── (c)…(c4) AS FORMAS CERTAS, não a palavra solta ──────────────────────────────────────
+  # POR QUE MUDOU (medido 2026-09-30, passada adversarial): a versão anterior desta família era
+  # 10 `grep` de PALAVRA, e 8 de 9 mutantes sobreviveram — inclusive o controle (remover um membro
+  # inteiro). Um adapter com o texto certo e o ENDPOINT errado passava. A cura é cobrar a forma
+  # exata que a sonda mediu funcionar: mutar o verbo, a URL, o campo ou o aninhamento agora reprova.
+  # ESCOPADO À SEÇÃO, e a razão é de mutação: a 1ª versão procurava `PATCH` no arquivo INTEIRO, e
+  # um mutante que trocava só o verbo do `updateTask` sobrevivia porque o `updateStatus` também diz
+  # PATCH. Guarda de documento longo tem de olhar o TRECHO que decide, não a presença da palavra.
+  local _sec_upd; _sec_upd="$(_zoho_sec 'updateTask')"
+  if grep -qF 'PATCH/projects/{projectId}/tasks/{taskId}' <<< "${_sec_upd}" \
+     && ! grep -qE '^(PUT|POST)/projects/\{projectId\}/tasks/' <<< "${_sec_upd}" \
+     && grep -qF 'INVALID_METHOD' "${ad}"; then
+    record_pass "zoho-adapter: (c) a SEÇÃO do updateTask usa PATCH (e nenhum PUT/POST no recurso), com o erro que prova"
+  else record_fail "zoho-adapter: (c)" "na seção do updateTask o endpoint não é \`PATCH /projects/{projectId}/tasks/{taskId}\`, ou há PUT/POST no recurso — mutar o verbo aqui é o defeito nº1 medido"; fi
+
+  if grep -qF 'api/v3/portal/${ZOHO_PORTAL_ID}' <<< "${_flat}"; then
+    record_pass "zoho-adapter: (c2) a base declara o segmento \`portal\` SINGULAR"
+  else record_fail "zoho-adapter: (c2)" "a base não é \`/api/v3/portal/\${ZOHO_PORTAL_ID}\` — o plural devolve 400 URL_RULE_NOT_CONFIGURED"; fi
+
+  local _sec_cmt; _sec_cmt="$(_zoho_sec 'addComment')"
+  if grep -qF '{"comment":' <<< "${_sec_cmt}"; then
+    record_pass "zoho-adapter: (c3) a seção do addComment usa o campo \`comment\`"
+  else record_fail "zoho-adapter: (c3)" "na seção do addComment o campo não é \`comment\` — \`content\`/\`text\`/\`body\` dão LESS_THAN_MIN_OCCURANCE"; fi
+
+  # As três escritas aninhadas, cada uma cobrada NA SEÇÃO que a decide. A variante plana de cada
+  # uma foi medida: `tasklist_id` → 400 · `custom_status` → 400 (nome E id) · `owners` → 2xx e IGNORA.
+  local _forms_missing=""
+  local _s1 _s2 _s3
+  _s1="$(_zoho_sec 'createTask')"; _s2="$(_zoho_sec 'updateStatus')"; _s3="$(_zoho_sec 'owners_and_work')"
+  grep -qF '"tasklist":{"id"'  <<< "${_s1}" || _forms_missing="${_forms_missing}tasklist-aninhada(createTask) "
+  grep -qF '"status":{"id"'    <<< "${_s2}" || _forms_missing="${_forms_missing}status-aninhado(updateStatus) "
+  grep -qF '"owners_and_work"' <<< "${_s3}" || _forms_missing="${_forms_missing}owners_and_work(atribuicao) "
+  if [ -z "${_forms_missing}" ]; then
+    record_pass "zoho-adapter: (c4) as três escritas aninhadas estão na SEÇÃO que decide cada uma (tasklist · status · owners_and_work)"
+  else record_fail "zoho-adapter: (c4)" "forma(s) de escrita ausente(s) na própria seção: ${_forms_missing}— a regra em prosa da §1 não substitui o exemplo da seção; foi assim que dois mutantes sobreviveram"; fi
+
+  # (d) `portal` SINGULAR declarado em prosa (o aviso que o leitor lê antes do código)
+  if grep -qE 'portal.*SINGULAR|`portal` singular' "${ad}"; then
+    record_pass 'zoho-adapter: (d) o segmento `portal` singular está avisado em prosa'
+  else record_fail "zoho-adapter: (d)" 'o adapter não avisa que o segmento é `portal` singular (o plural devolve 400)'; fi
+
+  # (e) o filtro que NÃO filtra — sem isto, searchTasks devolve tudo achando que buscou
+  if grep -qE 'não filtra' "${ad}"; then
+    record_pass "zoho-adapter: (e) o adapter avisa que ?search= NÃO filtra"
+  else record_fail "zoho-adapter: (e)" "falta o aviso de que ?search= é aceito e ignorado — searchTasks devolveria a lista inteira como resultado"; fi
+
+  # (f) createSubtask usa o vínculo ANINHADO. A guarda cobra a FORMA, e a razão é a história deste
+  # caso: em 2026-09-30 ele mudou DUAS vezes num dia. Primeiro cobrava "V2 + 2026-12-31", canonizando
+  # a promessa falsa de que a V2 entregava subtask (aceitei um 201 sem abrir o corpo). Depois cobrava
+  # a RECUSA — e canonizava uma impossibilidade que também era falsa: eu havia testado só as formas
+  # PLANAS (`parent_task`, `parent`, `parent_task_id` no topo, os três 400) e concluído que não havia
+  # caminho. A KB de um adotante, mais nova, trazia `parental_info.parent_task_id`, e a sonda
+  # confirmou na hora: filha `depth: 1`, pai `has_subtasks: true`.
+  # Por isso o caso agora cobra o ANINHAMENTO — a convenção que a §1 do adapter já declarava e que
+  # eu não apliquei a mim. Guarda que canoniza a conclusão da semana passada é pior que guarda nenhuma.
+  local _sec_sub; _sec_sub="$(_zoho_sec 'createSubtask')"
+  if grep -qF '"parental_info":{"parent_task_id"' <<< "$(printf '%s' "${_sec_sub}")" && grep -qF 'depth' <<< "${_sec_sub}"; then
+    record_pass "zoho-adapter: (f) createSubtask usa o vínculo ANINHADO parental_info, com a evidência (depth 1 / has_subtasks)"
+  else record_fail "zoho-adapter: (f)" "a seção do createSubtask não mostra \`{\"parental_info\":{\"parent_task_id\":…}}\` nem a evidência medida (filha depth 1, pai has_subtasks true) — as formas PLANAS dão 400 e já produziram DUAS conclusões erradas neste arquivo"; fi
+
+  # (g)(h) o roteamento existe e o detector conhece as variáveis
+  if grep -qF "case 'zoho':" "${fac}"; then
+    record_pass "zoho-adapter: (g) factory.md roteia 'zoho'"
+  else record_fail "zoho-adapter: (g)" "factory.md não roteia 'zoho' — o adapter existe e ninguém o alcança"; fi
+  if grep -qF 'ZOHO_CLIENT_SECRET' "${det}"; then
+    record_pass "zoho-adapter: (h) detector.md declara as variáveis obrigatórias do zoho"
+  else record_fail "zoho-adapter: (h)" "detector.md não conhece zoho — o fallback gracioso não avisa o que falta"; fi
+
+  # (j) PARIDADE DE VOCABULÁRIO — DERIVADA, com baseline. O achado que custou caro nesta sessão:
+  # declarei "9 pontos ligados" conferindo por MENÇÃO, e o tipo `TaskManagerProvider` não tinha
+  # 'zoho' — o adapter era inválido contra a própria abstração. A 1ª cura trocou a menção por uma
+  # LISTA DIGITADA de 8 caminhos, e a passada adversarial mostrou que ela caiu pela MESMA classe:
+  # 7 sítios operacionais ficaram fora da lista (o `@task-specialist`, o `description:` do
+  # /product:task, os dois `onion`, a 2ª união em interface.md…). Lista digitada é terceira fonte.
+  # PREDICADO: arquivo rastreado de .claude/ + CLAUDE.md que ENUMERA providers (cita 3 ou mais dos
+  # existentes — a assinatura de enumeração, não a palavra solta) tem de citar os novos. Fora:
+  # diary/ (snapshot histórico, não se reescreve), vendor/ (código de terceiro), *baseline.txt.
+  # Isenção vai para zoho-parity-exceptions.txt COM razão; o baseline SÓ ENCOLHE.
+  # ⊘ NO ADOTANTE: este caso e o (k) cobram a AUTORIA do framework — que todo sítio do core que
+  # enumera providers cite os novos. No adotante eles leriam o `CLAUDE.md` e o `.env.example` DELE,
+  # que são legitimamente dele: o `.env.example` do core nem chega lá (never-clobber manda para
+  # `.env.example.onion`). Cobrar isso é passivo alheio, a mesma classe que o `regen-baselines.sh`
+  # cura filtrando chave estrangeira. Medido por dogfood em 2026-09-30, num hub real: 13 dos 15
+  # casos passaram e SÓ estes dois reprovaram. O escopo é por CASO, não por família, porque os
+  # outros 13 valem no adotante — o adapter viaja.
+  if [ "${SELFTEST_ROLE:-source}" != "source" ]; then
+    record_skip "zoho-adapter: (j) core-only (role: ${SELFTEST_ROLE} — paridade de AUTORIA; no consumidor leria o CLAUDE.md dele)"
+    record_skip "zoho-adapter: (k) core-only (role: ${SELFTEST_ROLE} — o .env.example do consumidor é dele; o do core vai para .env.example.onion)"
+  else
+  local _sem="" _f _n _p
+  while IFS= read -r _f; do
+    [ -n "${_f}" ] || continue
+    case "${_f}" in .claude/diary/*|*/vendor/*|*baseline.txt) continue ;; esac
+    _n=0
+    for _p in clickup asana jira linear; do grep -qi "${_p}" "${REPO_ROOT}/${_f}" && _n=$((_n+1)); done
+    [ "${_n}" -ge 3 ] || continue
+    grep -qi zoho "${REPO_ROOT}/${_f}" && continue
+    if [ -f "${base_j}" ] && grep -qxF "${_f}" <(grep -v '^[[:space:]]*#' "${base_j}" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//'); then continue; fi
+    _sem="${_sem}${_f} "
+  done < <(cd "${REPO_ROOT}" && git grep -ril 'linear' -- '.claude' 'CLAUDE.md' 2>/dev/null | sort)
+  if [ -z "${_sem}" ]; then
+    record_pass "zoho-adapter: (j) PARIDADE de vocabulário — todo sítio que ENUMERA providers (>=3) cita zoho, ou está isento com razão"
+  else record_fail "zoho-adapter: (j)" "sítio que enumera providers e NÃO cita zoho: ${_sem}— foi assim que o TIPO ficou sem o provider e o adapter nasceu inválido. Cure o sítio, ou isente em zoho-parity-exceptions.txt COM a razão"; fi
+
+  # (i) a coluna Zoho nas DUAS tabelas de mapeamento canônico
+  local _n_tab; _n_tab="$(grep -c 'Zoho Projects |' "${iface}")"
+  if [ "${_n_tab}" -ge 2 ]; then
+    record_pass "zoho-adapter: (i) interface.md tem a coluna Zoho nas duas tabelas (status e prioridade)"
+  else record_fail "zoho-adapter: (i)" "interface.md tem ${_n_tab} tabela(s) com coluna Zoho, esperado 2 — o mapeamento canônico mora lá"; fi
+
+  # (k) a UNIÃO do tipo e o .env.example — os dois sítios onde 'zoho' é vocabulário de máquina
+  if grep -qF "'zoho'" "${types}" && grep -qF 'ZOHO_PORTAL_ID' "${envex}"; then
+    record_pass "zoho-adapter: (k) o tipo TaskManagerProvider inclui 'zoho' e o .env.example documenta as variáveis"
+  else record_fail "zoho-adapter: (k)" "types.md sem 'zoho' na união, ou .env.example sem ZOHO_PORTAL_ID — foi exatamente o buraco que a releitura da lista achou"; fi
+  fi
+}
+
+_family run_kb_applies_to_selftests
+_family run_zoho_adapter_selftests
+_family run_door_role_change_refusal_selftests
+_family run_review_cause_bands_selftests
 _family run_research_workflow_selftests
 
 # Modo kg-scope — --scope do gate (insumo do /meta:kg backfill); protege a catraca canônica.
@@ -18655,6 +20067,373 @@ print("OK" if f1 and f2 and f1[0] != f2[0] else "CONTIGUO")
   rm -rf "$e"
 }
 _family run_shard_plan_selftests
+
+# ── REGRA 89: a divida de Aufhebung, e as SEIS evasoes que uma passada adversarial provou ─────
+# POR QUE EXISTE (2026-09-23): a 1a versao desta guarda varria so os `kg:` das baselines — a
+# rodada ATUAL de cada eixo — e por isso contava 1 de uma divida de 6. Cada rodada nova DESPEJAVA
+# a anterior da conta sem reconciliar nada, e "a metrica de saude e este numero diminuindo" era
+# falso: o denominador eram EIXOS, nao rodadas seladas. Alem disso, oito fixtures onde a guarda
+# DEVERIA acusar passaram com TOTAL 0. Cada caso abaixo fixa uma dessas evasoes.
+# ⚠️ E a 1a versao DESTA FAMILIA rodava o lint INTEIRO 4 vezes (12+ min, numa faixa do CI).
+#    Guarda extraida para script proprio e exercitada direto: ~0,1 s o check, ~3 s a familia.
+run_radar_aufhebung_selftests() {
+  local sut="${SCRIPT_DIR}/radar-aufhebung-check.sh"
+  if [ ! -f "${sut}" ]; then record_skip "radar-aufhebung: o SUT nao existe (${sut})"; return; fi
+  local d; d="$(mktemp -d)"
+
+  # monta um repo-fixture: $1=subdir · $2=linhas extras no meta · $3=edge_type · $4=linha do kg
+  _r89() {
+    local sub="$1" meta="$2" et="${3:-SUPPORTS}" kgl="${4:-docs/evolution/research/radar-x/rx.kg.yaml}"
+    mkdir -p "$d/$sub/docs/onion" "$d/$sub/docs/evolution/research/radar-x"
+    { echo 'eixos:'; echo '  E9:'; echo "    kg: ${kgl}"; } > "$d/$sub/docs/onion/radar-baselines.yaml"
+    { echo 'meta:'; echo '  id: rx'
+      [ -n "${meta}" ] && printf '%s\n' "${meta}"
+      echo 'nodes:'; echo '  - id: E_UM'
+      echo 'edges:'; echo '  - from: E_UM'; echo '    to: E_UM'; echo "    edge_type: ${et}"
+    } > "$d/$sub/docs/evolution/research/radar-x/rx.kg.yaml"
+  }
+  _n() { bash "${sut}" "$d/$1" 2>/dev/null | awk -F'\t' '$1=="TOTAL"{print $2}'; }
+  _esp() { # $1=subdir $2=esperado $3=rotulo
+    local got; got="$(_n "$1")"
+    if [ "${got}" = "$2" ]; then record_pass "radar-aufhebung: $3"
+    else record_fail "radar-aufhebung: ${3%% *}" "${3#* } — TOTAL=${got:-<vazio>}, esperado $2"; fi
+  }
+
+  _r89 a  ""                                   ""            ; _esp a 1 "(a) rodada sem Aufhebung nem declaracao e ACUSADA"
+  _r89 b  ""                                   "SUPERSEDES"  ; _esp b 0 "(b) rodada que reconciliou nao e acusada"
+  _r89 c  '  supersedes_none: a razao real'    ""            ; _esp c 0 "(c) supersedes_none COM VALOR e desfecho legitimo"
+
+  # (d) a UNICA forma expressavel de Aufhebung cross-file — a aresta do motor e INTRA-arquivo, e o
+  #     /meta:radar manda grafo PROPRIO por rodada. Sem este caso a guarda pune quem obedece.
+  _r89 e  '  supersedes_external: "outro.kg.yaml#E_VELHO"' ""; _esp e 0 "(d) supersedes_external conta (a aresta nao cruza arquivo)"
+
+  # (e) FAIL-OPEN provado no grafo REAL: bastava a PALAVRA para calar a guarda. Tres formas vazias.
+  _r89 f1 '  supersedes_none:'                 ""            ; _esp f1 1 "(e1) supersedes_none VAZIO NAO cala a guarda"
+  _r89 f2 '  supersedes_none: "   "'           ""            ; _esp f2 1 "(e2) supersedes_none com aspas de ESPACO nao cala"
+  _r89 f3 "  supersedes_none: ''"              ""            ; _esp f3 1 "(e3) supersedes_none com aspas vazias nao cala"
+
+  # (f) a declaracao vale so no bloco `meta:`. Dentro de um NO nao e declaracao, e texto — e este
+  #     corpus usa block scalar de prosa, entao a palavra aparece naturalmente em label.
+  mkdir -p "$d/g/docs/onion" "$d/g/docs/evolution/research/radar-x"
+  { echo 'eixos:'; echo '  E9:'; echo '    kg: docs/evolution/research/radar-x/rx.kg.yaml'; } > "$d/g/docs/onion/radar-baselines.yaml"
+  { echo 'meta:'; echo '  id: rx'; echo 'nodes:'; echo '  - id: E_UM'
+    echo '    supersedes_none: dentro do no, nao vale'
+    echo 'edges:'; echo '  - from: E_UM'; echo '    to: E_UM'; echo '    edge_type: SUPPORTS'
+  } > "$d/g/docs/evolution/research/radar-x/rx.kg.yaml"
+  _esp g 1 "(f) declaracao FORA do meta (dentro de um no) nao conta"
+
+  # (g) `edge_type: SUPERSEDES` citado em PROSA nao e reconciliacao; e o casamento e EXATO, entao
+  #     `SUPERSEDESX_INVENTADO` tambem nao passa. Ambos passavam na 1a versao.
+  mkdir -p "$d/h/docs/onion" "$d/h/docs/evolution/research/radar-x"
+  { echo 'eixos:'; echo '  E9:'; echo '    kg: docs/evolution/research/radar-x/rx.kg.yaml'; } > "$d/h/docs/onion/radar-baselines.yaml"
+  { echo 'meta:'; echo '  id: rx'; echo 'nodes:'; echo '  - id: E_UM'
+    echo '    label: "o texto diz edge_type: SUPERSEDES mas e prosa"'
+    echo 'edges:'; echo '  - from: E_UM'; echo '    to: E_UM'; echo '    edge_type: SUPPORTS'
+  } > "$d/h/docs/evolution/research/radar-x/rx.kg.yaml"
+  _esp h 1 "(g) SUPERSEDES em PROSA nao conta como reconciliacao"
+  _r89 i "" "SUPERSEDESX_INVENTADO"            ; _esp i 1 "(g2) casamento e EXATO (prefixo inventado nao passa)"
+
+  # (h) comentario no fim da linha do `kg:` — estilo que o arquivo real ja usa. Sem cortar, o
+  #     caminho saia com o comentario colado e a rodada sumia em silencio.
+  _r89 j "" "" 'docs/evolution/research/radar-x/rx.kg.yaml   # a rodada 5'
+  _esp j 1 "(h) kg: com comentario no fim nao fica invisivel"
+
+  # (i) ponteiro PENDURADO e REPORTADO, nao engolido — nenhum caso cobria esta linha antes.
+  _r89 k "" "" 'docs/nao/existe.kg.yaml'
+  # `sut | grep -q` fecha o pipe cedo: o SUT leva SIGPIPE e, sob `set -o pipefail`, o `if` le 141
+  # como FALSO — a familia `pipefail-epipe-early-closer` que esta casa ja pagou caro. Capture e
+  # depois filtre; nunca deixe um leitor que sai cedo decidir o veredito.
+  local _ok; _ok="$(bash "${sut}" "$d/k" 2>/dev/null)"
+  if LC_ALL=C grep -q '^PONTEIRO-QUEBRADO' <<< "${_ok}"; then
+    record_pass "radar-aufhebung: (i) kg: pendurado e REPORTADO (nao some da conta calado)"
+  else record_fail "radar-aufhebung: (i)" "ponteiro quebrado sumiu em silencio"; fi
+
+  # (j) O UNIVERSO E O ERRO QUE INVERTIA A TESE: rodada selada que o ponteiro JA ABANDONOU segue
+  #     na conta. Antes, trocar o `kg:` DESPEJAVA a divida em vez de reconcilia-la.
+  mkdir -p "$d/l/docs/onion" "$d/l/docs/evolution/research/radar-velha" "$d/l/docs/evolution/research/radar-nova"
+  { echo 'eixos:'; echo '  E9:'; echo '    kg: docs/evolution/research/radar-nova/rn.kg.yaml'; } > "$d/l/docs/onion/radar-baselines.yaml"
+  for r in velha:rv nova:rn; do
+    { echo 'meta:'; echo "  id: ${r#*:}"; echo 'nodes:'; echo '  - id: E_UM'
+      echo 'edges:'; echo '  - from: E_UM'; echo '    to: E_UM'; echo '    edge_type: SUPPORTS'
+    } > "$d/l/docs/evolution/research/radar-${r%%:*}/${r#*:}.kg.yaml"
+  done
+  _esp l 2 "(j) rodada ABANDONADA pelo ponteiro segue na conta (o despejo era a inversao)"
+
+  # (k) a mesma rodada em N eixos conta UMA vez — contar N inflaria a catraca sem divida nova
+  mkdir -p "$d/m/docs/onion" "$d/m/docs/evolution/research/radar-x"
+  { echo 'eixos:'; for e in E1 E2 E3; do echo "  ${e}:"; echo '    kg: docs/evolution/research/radar-x/rx.kg.yaml'; done; } > "$d/m/docs/onion/radar-baselines.yaml"
+  { echo 'meta:'; echo '  id: rx'; echo 'nodes:'; echo '  - id: E_UM'
+    echo 'edges:'; echo '  - from: E_UM'; echo '    to: E_UM'; echo '    edge_type: SUPPORTS'; } > "$d/m/docs/evolution/research/radar-x/rx.kg.yaml"
+  _esp m 1 "(k) a mesma rodada em 3 eixos conta UMA vez"
+
+  # (l) baseline ILEGIVEL => nao pude julgar (exit 2), nunca zero silencioso
+  mkdir -p "$d/n/docs/onion"; : > "$d/n/docs/onion/radar-baselines.yaml"; chmod 000 "$d/n/docs/onion/radar-baselines.yaml"
+  local rcn; if bash "${sut}" "$d/n" >/dev/null 2>&1; then rcn=0; else rcn=$?; fi
+  chmod 644 "$d/n/docs/onion/radar-baselines.yaml"
+  if [ "${rcn}" -eq 2 ] || [ "$(id -u)" = "0" ]; then
+    record_pass "radar-aufhebung: (l) baseline ilegivel => NAO PUDE JULGAR (!= zero)"
+  else record_fail "radar-aufhebung: (l)" "ilegivel virou zero silencioso (rc=${rcn})"; fi
+
+  # (m) baseline AUSENTE e silencio legitimo (adotante sem radar) — o par de (l)
+  mkdir -p "$d/o"; _esp o 0 "(m) sem baseline, silencio legitimo (adotante sem radar)"
+
+  # (n) `--emit-baseline` existe e emite CHAVEADO. A REGRA 62 cobra emissor para todo baseline, e
+  #     a bancada completa REPROVOU a 1a versao exatamente aqui (regen-ensure-from, caso (g)).
+  _r89 p "" ""
+  local emt; emt="$(bash "${sut}" "$d/p" --emit-baseline 2>/dev/null)"
+  if LC_ALL=C grep -qx 'docs/evolution/research/radar-x/rx.kg.yaml' <<< "${emt}"; then
+    record_pass "radar-aufhebung: (n) --emit-baseline emite o baseline CHAVEADO"
+  else record_fail "radar-aufhebung: (n)" "emissor ausente ou nao-chaveado: $(_emit "${emt}" | head -c 140)"; fi
+
+  rm -rf "$d"
+}
+_family run_radar_aufhebung_selftests
+
+# ---------------------------------------------------------------------------
+# O LINT NAO MORRE CALADO — o lado CONSUMIDOR da REGRA 89 e o rotulo de morte
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE (medido 2026-09-23, na porta publica): a familia acima exercita o SUT
+# (`radar-aufhebung-check.sh`) e passava verde enquanto o CONSUMIDOR dele, dentro do
+# `lint-artifacts.sh`, MORRIA. Com o baseline VAZIO — o caso da porta, e o caso de qualquer
+# adotante que nunca reconciliou nada — o `grep -v` nao casa nada, devolve 1, a lista `&&` termina
+# em falha e o `set -e` mata o lint DENTRO da funcao: rc=1, zero sumario, e o CI lendo aquele rc=1
+# como "achou violacao HARD". Foram DUAS hipoteses erradas antes de medir, porque a morte era
+# silenciosa. Bancada que testa so o produtor nao ve isto — o defeito vive na juncao.
+run_lint_silent_death_selftests() {
+  local lint="${SCRIPT_DIR}/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_skip "lint-morte: o SUT nao existe (${lint})"; return; fi
+  local d; d="$(mktemp -d)"
+
+  # stub do produtor: o consumidor o invoca como `bash "${SCRIPT_DIR}/radar-aufhebung-check.sh"`
+  _lm_stub() { printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$1" > "$d/radar-aufhebung-check.sh"; }
+  # roda SO a funcao consumidora, com as MESMAS opcoes de shell do runner (`set -euo pipefail`) —
+  # sem elas o caso nao reproduz nada, que e o erro que esta bancada ja cometeu antes
+  _lm_run() { # $1=conteudo do baseline (vazio = arquivo de 0 bytes)
+    printf '%s' "$1" > "$d/base.txt"
+    bash -c '
+      set -euo pipefail
+      SCRIPT_DIR="'"$d"'"; REPO_ROOT="'"$d"'"; _R89_BASE="'"$d"'/base.txt"
+      violation() { echo "V[$1] $2 :: $3"; }
+      source <(sed -n "/^check_radar_aufhebung()/,/^}$/p" "'"${lint}"'")
+      check_radar_aufhebung
+      echo "SOBREVIVEU"
+    ' 2>&1
+  }
+
+  _lm_stub ''                                                   # produtor sem acusacao
+  local o; o="$(_lm_run '' || true)"
+  if grep -q 'SOBREVIVEU' <<< "${o}"; then
+    record_pass "lint-morte: (a) baseline VAZIO nao mata o consumidor da REGRA 89"
+  else record_fail "lint-morte: (a)" "o consumidor morreu com baseline vazio (a morte da porta publica): ${o}"; fi
+
+  o="$(_lm_run '# so comentario
+# e linha em branco
+
+' || true)"
+  if grep -q 'SOBREVIVEU' <<< "${o}"; then
+    record_pass "lint-morte: (b) baseline SO com comentarios tambem nao mata"
+  else record_fail "lint-morte: (b)" "comentario-puro mata igual (mesma classe, grep -v devolve 1): ${o}"; fi
+
+  # (c) o caminho de TOLERANCIA continua funcionando — a cura nao pode virar fail-open
+  _lm_stub "printf 'SEM-AUFHEBUNG\\tdocs/x/r.kg.yaml\\n'; printf 'TOTAL\\t1\\n'"
+  o="$(_lm_run 'docs/x/r.kg.yaml
+' || true)"
+  if grep -q 'SOBREVIVEU' <<< "${o}" && ! grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "lint-morte: (c) entrada NO baseline segue tolerada (a cura nao virou fail-open)"
+  else record_fail "lint-morte: (c)" "tolerancia quebrada: ${o}"; fi
+
+  # (d) entrada FORA do baseline segue HARD — a catraca continua morde
+  o="$(_lm_run '' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "lint-morte: (d) entrada FORA do baseline segue HARD (catraca intacta)"
+  else record_fail "lint-morte: (d)" "a catraca deixou de morder: ${o}"; fi
+
+  # (e) O ROTULO: morte antes do sumario e `NAO PUDE JULGAR` (2), nunca veredito (0|1)
+  o="$(bash -c '
+    set -euo pipefail
+    _LINT_SUMMARY_REACHED=0
+    source <(sed -n "/^_lint_on_exit()/,/^}$/p" "'"${lint}"'")
+    # o rc E o objeto do caso: sem colher com `|| _rc=$?` o `set -e` mata o pai ANTES do echo e o
+    # caso reprova com o mecanismo funcionando (foi o que aconteceu na 1a redacao deste caso)
+    _rc=0; ( _lint_on_exit 1 ) || _rc=$?; echo "rc=${_rc}"
+  ' 2>&1 || true)"
+  if grep -q 'rc=2' <<< "${o}" && grep -q 'MORREU' <<< "${o}"; then
+    record_pass "lint-morte: (e) morte antes do sumario sai 2 e se ANUNCIA"
+  else record_fail "lint-morte: (e)" "morte calada ou rotulada como veredito: ${o}"; fi
+
+  # (f) O MECANISMO, MEDIDO NO COMPORTAMENTO — nao pela presenca das linhas.
+  # A 1a redacao deste caso asseria `grep -q '^_LINT_SUMMARY_REACHED=1'` + `grep -q "^trap"`, e um
+  # refutador independente derrubou em 2026-09-24: MOVER o flag para o topo do arquivo continua
+  # casando a ancora, o trap vira no-op, toda morte precoce volta a sair com rc cru e sem anuncio — e
+  # os 6 casos desta familia ficavam VERDES. Cobertura declarada sem cobertura real e pior que a
+  # ausencia do caso, e era exatamente a tese do cabecalho do lint sendo violada pelo teste dela.
+  # Agora: copia o lint para um sandbox, injeta uma morte ANTES do sumario e exige rc=2 + anuncio.
+  # Se o controle nao chega ao sumario, o caso NAO conclui (⊘), nunca aprova.
+  local lsb; lsb="$(mktemp -d)"
+  mkdir -p "${lsb}/.claude/validation"
+  cp "${lint}" "${lsb}/.claude/validation/lint-artifacts.sh"
+  local ctl; ctl="$(bash "${lsb}/.claude/validation/lint-artifacts.sh" 2>&1 || true)"
+  if ! grep -q '=== Sumário ===' <<< "${ctl}"; then
+    record_skip "lint-morte: (f) o controle no sandbox nao chegou ao sumario — NAO PUDE medir o mecanismo"
+  else
+    # morte sintetica imediatamente ANTES da linha que arma o flag: se o flag estiver no lugar certo,
+    # o trap precisa anunciar; se alguem o mover para o topo, esta morte sai calada e o caso reprova.
+    sed -i '/^_LINT_SUMMARY_REACHED=1/i grep -q ZZZ_MORTE_SINTETICA_DA_BANCADA /dev/null' \
+      "${lsb}/.claude/validation/lint-artifacts.sh"
+    local mrc=0 mout
+    mout="$(bash "${lsb}/.claude/validation/lint-artifacts.sh" 2>&1)" || mrc=$?
+    if [ "${mrc}" -eq 2 ] && grep -q 'MORREU' <<< "${mout}"; then
+      record_pass "lint-morte: (f) morte ANTES do sumario sai 2 e se anuncia — medido no comportamento"
+    else
+      record_fail "lint-morte: (f)" "o mecanismo nao mordeu: rc=${mrc} (esperado 2), MORREU=$(grep -c 'MORREU' <<< "${mout}") (esperado >=1) — se o flag foi movido para o topo, o trap virou no-op"
+    fi
+  fi
+  rm -rf "${lsb}"
+
+  rm -rf "$d"
+}
+_family run_lint_silent_death_selftests
+
+# ---------------------------------------------------------------------------
+# FORMA do manifest.tsv — o leitor de bash ve o que o awk ve?
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE (refutador independente, 2026-09-24): a 6a coluna `inject` nasceu inalcancavel para
+# linhas de campo vazio, porque `IFS=$'\t'` COLAPSA TABs consecutivos e `awk -F'\t'` nao. Nenhum
+# script conferia a forma do manifesto — `harness-inventory.sh` conta LINHAS, nao colunas. Esta
+# familia compara, linha por linha, o que o leitor de producao le contra o que o awk le: qualquer
+# divergencia e campo caindo na coluna errada, que e sempre silencioso.
+run_manifest_shape_selftests() {
+  local mf="${REPO_ROOT}/.claude/validation/fixtures/manifest.tsv"
+  if [ ! -f "${mf}" ]; then record_skip "manifest-shape: manifesto ausente (SUT nao exercido)"; return; fi
+  local mismatches=0 rows=0 nf_bad=0
+  while IFS=$'\t' read -r kind fixture target verdict keyword inject; do
+    case "${kind:-}" in ''|'#'*|kind) continue ;; esac
+    rows=$(( rows + 1 ))
+    # o que o awk ve na MESMA linha (sem colapso), casando pela fixture
+    local awk_inject awk_nf
+    awk_inject="$(awk -F'\t' -v f="${fixture}" '$2==f {print ($6=="-"?"":$6); exit}' "${mf}")"
+    awk_nf="$(awk -F'\t' -v f="${fixture}" '$2==f {print NF; exit}' "${mf}")"
+    [ "${inject:-}" = "${awk_inject}" ] || { mismatches=$(( mismatches + 1 )); \
+      record_fail "manifest-shape: ${fixture}" "o leitor de producao le inject='${inject:-}' e o awk le '${awk_inject}' — campo caiu na coluna errada (colapso de TAB)"; }
+    case "${awk_nf}" in 4|5|6) ;; *) nf_bad=$(( nf_bad + 1 ));
+      record_fail "manifest-shape: ${fixture}" "NF=${awk_nf} fora de 4..6 — coluna a mais ou a menos" ;; esac
+  done < "${mf}"
+  if [ "${rows}" -eq 0 ]; then
+    record_fail "manifest-shape" "ZERO rows lidas do manifesto — o leitor nao enxergou nada (nao e 'tudo ok')"
+  elif [ "${mismatches}" -eq 0 ] && [ "${nf_bad}" -eq 0 ]; then
+    record_pass "manifest-shape: ${rows} linha(s) — leitor de producao e awk concordam em TODA coluna"
+  fi
+}
+_family run_manifest_shape_selftests
+
+# ---------------------------------------------------------------------------
+# REGRA 84 — indice vazio LEGITIMO nao e gerador quebrado
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE (medido 2026-09-24, adotando um repo novo): o gate do adotante BARROU o primeiro
+# commit dele por este HARD, e o adotante nao tinha defeito nenhum — o corpus do dia 1 tem a semente
+# da adocao, cujo `trace:` e PROSA, e prosa e legitima pelo contrato do resolvedor. O gerador ja
+# distinguia (rc=3 + "indice VAZIO ... trace resolvivel"); a guarda descartava rc e stderr com
+# `2>/dev/null || true` e chamava tudo de gerador quebrado. Gate que nasce reprovando acaba desligado.
+run_kg_read_index_empty_selftests() {
+  local lint="${SCRIPT_DIR}/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_skip "r84-vazio: SUT ausente"; return; fi
+  local d; d="$(mktemp -d)"
+  mkdir -p "${d}/.claude/validation" "${d}/docs/onion"
+  printf 'placeholder\n' > "${d}/docs/onion/kg-read-index.tsv"
+
+  # roda SO a funcao, com as opcoes de shell do runner e um GERADOR-STUB no lugar do real
+  _r84() { # $1=rc do stub  $2=stderr do stub
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s" >&2\nexit %s\n' "$2" "$1" > "${d}/.claude/validation/kg-trace-resolve.sh"
+    bash -c '
+      set -euo pipefail
+      SCRIPT_DIR="'"${d}"'/.claude/validation"; REPO_ROOT="'"${d}"'"; ONLY_PATH=""
+      violation() { echo "V[$1] $3"; }
+      source <(sed -n "/^check_kg_read_index_sync()/,/^}$/p" "'"${lint}"'")
+      check_kg_read_index_sync
+    ' 2>&1
+  }
+
+  local o
+  o="$(_r84 3 'ERRO kg-trace-resolve --emit-index: indice VAZIO (parser leu 0 nos com trace resolvivel)' || true)"
+  if grep -q 'V\[SOFT\]' <<< "${o}" && grep -q 'CORPUS-SEM-TRACE-DE-ARQUIVO' <<< "${o}"; then
+    record_pass "r84-vazio: (a) corpus sem trace de ARQUIVO => SOFT legitimo (o dia 1 do adotante)"
+  else record_fail "r84-vazio: (a)" "vazio legitimo nao virou SOFT: ${o}"; fi
+
+  o="$(_r84 2 'ERRO kg-trace-resolve: python3 ausente' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}" && grep -q 'rc=2' <<< "${o}"; then
+    record_pass "r84-vazio: (b) gerador QUEBRADO segue HARD, com o rc e o stderr na mensagem"
+  else record_fail "r84-vazio: (b)" "falha real de ferramenta deixou de ser HARD (fail-open): ${o}"; fi
+
+  # (c) rc=3 SEM o marcador nao compra o SOFT — senao bastaria sair 3 para calar a guarda
+  o="$(_r84 3 'qualquer outra coisa' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "r84-vazio: (c) rc=3 SEM o marcador do gerador NAO compra o SOFT"
+  else record_fail "r84-vazio: (c)" "rc=3 sozinho calou a guarda — o marcador deixou de ser exigido: ${o}"; fi
+
+  rm -rf "${d}"
+}
+_family run_kg_read_index_empty_selftests
+
+# ---------------------------------------------------------------------------
+# REGRA 85 — a defasagem sai do gate de PR, o registro quebrado FICA
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE (decisao do maestro, 2026-09-24): `ANDOU-PARA-TRAS` virou SOFT porque a cura que ele
+# cobra so existe DEPOIS do merge — cobrar antes fazia todo PR nascer com HARD que nenhuma acao dentro
+# dele podia limpar, e uma leva pagou DUAS materializacoes por isso. A cobranca mudou de LUGAR (o
+# workflow onion-door-staleness, no push para main), nao de forca.
+# O RISCO DA MUDANCA e afrouxar demais: se `SEM-BASELINE` ou `PIN-DESCONHECIDO` cairem junto, a guarda
+# passa a tolerar REGISTRO QUEBRADO — pin que nao existe na historia, porta sem teto — que nao e
+# questao de momento nenhum. Esta familia existe para provar a fronteira nos dois lados.
+run_door_staleness_severity_selftests() {
+  local lint="${SCRIPT_DIR}/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_skip "porta-severidade: SUT ausente"; return; fi
+  local d; d="$(mktemp -d)"
+  mkdir -p "${d}/.claude/validation"
+
+  _ds() { # $1=linha que o stub emite  → devolve as violacoes que a funcao gerou
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\nexit 1\n' "$1" > "${d}/.claude/validation/door-staleness-check.sh"
+    bash -c '
+      set -euo pipefail
+      SCRIPT_DIR="'"${d}"'/.claude/validation"; REPO_ROOT="'"${d}"'"
+      violation() { echo "V[$1] $3"; }
+      source <(sed -n "/^check_door_staleness()/,/^}$/p" "'"${lint}"'")
+      check_door_staleness
+    ' 2>&1
+  }
+
+  local o
+  o="$(_ds 'onion-core	ANDOU-PARA-TRAS	4 > 0 tolerado' || true)"
+  if grep -q 'V\[SOFT\]' <<< "${o}" && grep -q 'DEFASADA-COBRADA-POS-MERGE' <<< "${o}"; then
+    record_pass "porta-severidade: (a) ANDOU-PARA-TRAS e SOFT e diz ONDE a cobranca mora"
+  else record_fail "porta-severidade: (a)" "defasagem nao virou SOFT rotulado: ${o}"; fi
+
+  o="$(_ds 'onion-core	SEM-BASELINE	7 commit(s) atras' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "porta-severidade: (b) SEM-BASELINE segue HARD (porta sem teto declarado)"
+  else record_fail "porta-severidade: (b)" "registro quebrado deixou de bloquear — a cura afrouxou demais: ${o}"; fi
+
+  o="$(_ds 'onion-core	PIN-DESCONHECIDO	vnextpin' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "porta-severidade: (c) PIN-DESCONHECIDO segue HARD (pin fora da historia)"
+  else record_fail "porta-severidade: (c)" "pin forjado deixou de bloquear: ${o}"; fi
+
+  o="$(_ds 'ERRO door-staleness: members.yaml ausente' || true)"
+  if grep -q 'V\[HARD\]' <<< "${o}"; then
+    record_pass "porta-severidade: (d) ERRO (nao pude julgar) segue HARD"
+  else record_fail "porta-severidade: (d)" "guarda que nao pode julgar passou em silencio: ${o}"; fi
+
+  # (e) a cobranca pos-merge EXISTE — senao a defasagem saiu do PR e nao chegou a lugar nenhum
+  local wf="${REPO_ROOT}/.github/workflows/onion-door-staleness.yml"
+  if [ -f "${wf}" ] && grep -q 'branches: \[main\]' "${wf}" && grep -qE 'door-staleness-check\.sh' "${wf}"; then
+    record_pass "porta-severidade: (e) a cobranca pos-merge existe e roda a guarda no push para main"
+  else record_fail "porta-severidade: (e)" "o workflow pos-merge nao existe ou nao invoca a guarda — a defasagem sairia do PR sem chegar a lugar nenhum"; fi
+
+  rm -rf "${d}"
+}
+_family run_door_staleness_severity_selftests
+
+
+
 
 
 

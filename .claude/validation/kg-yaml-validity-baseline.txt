@@ -1,0 +1,3 @@
+# kg-yaml-validity-baseline — arquivos .kg.yaml que o PyYAML rejeita e que estão TOLERADOS.
+# Gerado por: bash .claude/validation/kg-yaml-validity-check.sh --emit-baseline
+# A métrica de saúde é esta lista ENCOLHENDO — e isso é MECANISMO: crescer vs origin/main é HARD.
