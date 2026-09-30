@@ -138,6 +138,17 @@ nodes:
     drive_kind: decision
     label: "LGPD: (1) se o DC do Zoho for fora do Brasil, há transferência internacional (art. 33); (2) o fluxo GLPI→Zoho pode levar dado de paciente/consumidor à task, o que customer-communication.md proíbe tratar. A pergunta ao core ficou SUSPENSA pelo maestro em 2026-09-30."
 
+  - id: EV_ADVERSARIAL_PASS_PR3
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: 3-rodadas-refutacao-2-lentes-veredito-final-APROVADO-commit-81b2878-bateria-90-de-90-mutacao-11-de-11
+    trace: .claude/utils/task-manager/adapters/zoho-projects.md
+    label: "Passada adversarial do PR #3 em 3 rodadas (lentes maquinaria e 'o artefato mente?', opus em worktree isolada). 8 HARD reais, todos curados neste PR: H1 lista vazia silenciosa (a doc Zoho se contradiz sobre o formato), H2 id '…undefined', host api_domain→404, N1 safeJson corrompia strings, N2 delete decidia pela mensagem, N3 cache envenenado, R1 double virava JSON inválido, R2 401/429 viravam lista truncada. 3 dos 8 foram CRIADOS por curas anteriores, pegos porque o loop foi re-revisado. Veredito final APROVADO. Bateria 90/90 e mutação 11/11."
+
   - id: C_HOOK_HUB_FALSE_POSITIVE
     node_type: claim
     plane: PROD
@@ -149,6 +160,10 @@ nodes:
     label: "O hook bash-empty-result-guard avisa PR-SEM-PASSADA-ADVERSARIAL ao abrir PR num repo hub, mas a REGRA 56 (PR aberto carrega RESÍDUO da passada adversarial) isenta hub: rodada no PR #2, deu rc=0 com skip. O hook não consulta o papel do repo. É um sinal para o core."
 
 edges:
+  - from: EV_ADVERSARIAL_PASS_PR3
+    to: T_SAC60
+    edge_type: SUPPORTS
+    label: "A implementação sobreviveu à refutação só depois de 3 rodadas de cura."
   - from: EV_ZOHO_V3_DOCS
     to: D_ZOHO_MAPPING
     edge_type: SUPPORTS
