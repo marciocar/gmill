@@ -12,7 +12,7 @@ Define os tipos TypeScript compartilhados entre todos os adapters, garantindo co
 /**
  * Provedores de gerenciamento de tarefas suportados.
  */
-type TaskManagerProvider = 'clickup' | 'asana' | 'jira' | 'linear' | 'none';
+type TaskManagerProvider = 'clickup' | 'asana' | 'jira' | 'linear' | 'zoho-projects' | 'none';
 
 /**
  * Transporte usado pelo adapter para se comunicar com o provider.
@@ -20,7 +20,8 @@ type TaskManagerProvider = 'clickup' | 'asana' | 'jira' | 'linear' | 'none';
  * 'api' (default) — REST API direta; sempre disponível.
  * 'mcp'           — MCP server do provider; ativado via
  *                   TASK_MANAGER_TRANSPORT=mcp apenas quando o provider
- *                   suporta MCP (clickup, linear). Cai para 'api' nos demais.
+ *                   suporta MCP (clickup, linear). Cai para 'api' nos demais
+ *                   ('zoho-projects' é sempre 'api').
  *
  * Controlado por: TASK_MANAGER_TRANSPORT (valores: 'api' | 'mcp'; default 'api').
  */
@@ -412,6 +413,17 @@ const STATUS_MAPPING: Record<TaskManagerProvider, Record<TaskStatus, string>> = 
     closed: 'Canceled',
     canceled: 'Canceled'
   },
+  'zoho-projects': {
+    // Nome-alvo na escrita; o adapter resolve o status.id pela lista do portal
+    // (global-statuses) e casa por nome normalizado. Ver adapters/zoho-projects.md
+    backlog: 'Backlog',
+    todo: 'Open',
+    in_progress: 'In Progress',
+    review: 'In Review',
+    done: 'Closed',
+    closed: 'Closed',        // perda: escrito como done (ADR, Decisão 5)
+    canceled: 'Cancelled'
+  },
   none: {
     backlog: 'backlog',
     todo: 'todo',
@@ -433,7 +445,7 @@ const STATUS_MAPPING: Record<TaskManagerProvider, Record<TaskStatus, string>> = 
 
 ---
 
-**Versão**: 1.1.0
+**Versão**: 1.2.0
 **Criado em**: 2025-11-24
-**Atualizado em**: 2026-06-13
+**Atualizado em**: 2026-09-30 (provider `zoho-projects`)
 

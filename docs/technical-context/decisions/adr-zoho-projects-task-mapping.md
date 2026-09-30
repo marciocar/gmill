@@ -2,6 +2,7 @@
 title: "ADR — Mapeamento Zoho Projects V3 → ITaskManager (adapter zoho-projects)"
 date: 2026-09-30
 updated: 2026-09-30
+implemented_by: .claude/utils/task-manager/adapters/zoho-projects.md (SAC-60/61)
 type: adr
 status: aceito — ratificado pelo maestro em 2026-09-30 (após 2 passadas de revisão independente)
 decision-scope: engenharia / task-manager SDAAL / adapter zoho-projects
@@ -45,7 +46,7 @@ pelo mapeamento abaixo (tasks, comments, projects, global-statuses) está em v3.
 **Todos os 12 métodos do `ITaskManager` que dependem de API têm endpoint na V3.** Os outros dois
 são locais.
 
-Prefixo comum: `{api_domain}/api/v3/portal/{portal_id}`
+Prefixo comum: `https://projects.zoho{dc}/api/v3/portal/{portal_id}`. O host vem do DC de accounts, **não** do `api_domain` do token (`www.zohoapis.*` responde 404 para o Projects; medido na implementação, SAC-60)
 
 | Método | Verbo + rota | Escopo OAuth | Âncora |
 |---|---|---|---|
@@ -210,6 +211,7 @@ de prioridade, mas isso depende da configuração do portal e sai do escopo.
 | P3 | Confirmar se o `root_task_id` de subtasks aninhadas afeta o id composto (é o mesmo `project_id`) | Idem |
 | P4 | Confirmar se os status valem por layout de projeto e, se valerem, trocar `global-statuses` pelo detalhe do layout (`/settings/layouts/{id}`) | Idem |
 | P5 | Nome do campo de filtro para `tags` (API de campos do módulo) | Idem |
+| P6 | Se o Markdown da descrição/comentário renderiza no Zoho, e o formato do link web da task (a API não devolve link; o adapter o monta `[INFERIDO]`) | Idem |
 
 ## Histórico de revisão
 

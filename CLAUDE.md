@@ -37,7 +37,7 @@ escolha). Para populá-lo com os frameworks aplicáveis: `/docs:build-compliance
 ## 🔌 Task Manager — Detecção e Roteamento
 
 Provider-agnóstico via SDAAL (`.claude/utils/task-manager/`). **Antes de operar com tasks**, carregue
-o `.env` e leia `TASK_MANAGER_PROVIDER` (`jira` | `clickup` | `asana` | `linear` | `none`) +
+o `.env` e leia `TASK_MANAGER_PROVIDER` (`jira` | `clickup` | `asana` | `linear` | `zoho-projects` | `none`) +
 `TASK_MANAGER_TRANSPORT` (`api` default | `mcp`). Delegue ao especialista do provider ativo
 (`@jira-specialist`, `@clickup-specialist`) ou ao `@task-specialist`. Variável ausente → avisar em
 pt-BR + sugerir `/meta:setup-integration`; nunca inventar valores.

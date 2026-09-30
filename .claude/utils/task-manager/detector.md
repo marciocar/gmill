@@ -43,7 +43,8 @@ function detectTransport(): TaskManagerTransport {
  * @returns Configuração do provedor ativo (inclui campo `transport`)
  */
 function detectProvider(): ProviderConfig {
-  const provider = (process.env.TASK_MANAGER_PROVIDER || 'none') as TaskManagerProvider;
+  // trim + lowercase: o mesmo normalizado que detectProviderFromTaskId usa (' Zoho-Projects' ≠ fallback silencioso p/ none)
+  const provider = ((process.env.TASK_MANAGER_PROVIDER || 'none').trim().toLowerCase()) as TaskManagerProvider;
   const requestedTransport = detectTransport();
 
   /**
@@ -52,7 +53,8 @@ function detectProvider(): ProviderConfig {
    * A disponibilidade real do MCP é verificada em runtime pelo adapter (fallback → api).
    */
   function resolveTransport(p: TaskManagerProvider): TaskManagerTransport {
-    return p === 'none' ? 'api' : requestedTransport;
+    // 'zoho-projects' não tem servidor MCP → sempre 'api' (ADR zoho-projects-task-mapping)
+    return p === 'none' || p === 'zoho-projects' ? 'api' : requestedTransport;
   }
 
   const configs: Record<TaskManagerProvider, ProviderConfig> = {
@@ -113,6 +115,21 @@ function detectProvider(): ProviderConfig {
         : undefined
     },
 
+    'zoho-projects': (() => {
+      const required = ['ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN', 'ZOHO_ACCOUNTS_URL', 'ZOHO_PORTAL_ID'];
+      const missing = required.filter(v => !process.env[v]);
+      return {
+        provider: 'zoho-projects' as TaskManagerProvider,
+        transport: resolveTransport('zoho-projects'),   // sempre 'api'
+        isConfigured: missing.length === 0,
+        requiredEnvVars: required,
+        optionalEnvVars: ['ZOHO_DEFAULT_PROJECT_ID', 'ZOHO_DEFAULT_TASKLIST_ID', 'ZOHO_WEB_URL'],
+        errorMessage: missing.length
+          ? `❌ Zoho Projects não configurado. Variáveis faltando: ${missing.join(', ')}. Execute /meta/setup-integration`
+          : undefined
+      };
+    })(),
+
     none: {
       provider: 'none',
       transport: 'api',  // Modo offline; sem transporte real
@@ -143,6 +160,22 @@ function detectProviderFromTaskId(taskId: string): TaskManagerProvider | null {
   }
   
   const trimmedId = taskId.trim();
+  const configuredProvider = (process.env.TASK_MANAGER_PROVIDER || '').trim().toLowerCase();
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ZOHO PROJECTS — ANTES de todas as regras numéricas/alfanuméricas abaixo
+  // (ADR docs/technical-context/decisions/adr-zoho-projects-task-mapping.md, Decisão 4)
+  // - Id composto <project_id>.<task_id> (5+ dígitos cada lado): inequívoco (nenhum outro provider usa ponto)
+  // - Id numérico puro (13 a 19 dígitos no Zoho) colide com ClickUp (9 chars),
+  //   Jira (5-14 dígitos) e Asana (15+). Desempate: provider configurado.
+  //   Com outro provider configurado, as regras abaixo seguem valendo.
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (/^[1-9]\d{4,}\.[1-9]\d{4,}$/.test(trimmedId)) {   // 5+ dígitos por lado, sem zero à esquerda: '1.0'/'2026.09' não são Zoho
+    return 'zoho-projects';
+  }
+  if (configuredProvider === 'zoho-projects' && /^\d{5,}$/.test(trimmedId)) {
+    return 'zoho-projects';
+  }
   
   // ═══════════════════════════════════════════════════════════════════════════
   // CLICKUP
@@ -386,6 +419,7 @@ console.log(status.message);
 |--------------------------|----------|--------------------|--------|
 | `api` (ou ausente)       | qualquer | `api`              | default |
 | `mcp`                    | `clickup`/`asana`/`jira`/`linear` | `mcp` | usa MCP se disponível em runtime; senão fallback p/ `api` |
+| `mcp`                    | `zoho-projects` | `api`     | não existe servidor MCP do Zoho Projects |
 | `mcp`                    | `none`    | `api`             | modo offline — sem transporte real |
 
 > Os adapters consultam `config.transport` para decidir qual via usar internamente
@@ -401,7 +435,7 @@ console.log(status.message);
 
 ---
 
-**Versão**: 1.1.0
+**Versão**: 1.2.0
 **Criado em**: 2025-11-24
-**Atualizado em**: 2026-06-13
+**Atualizado em**: 2026-09-30 (provider `zoho-projects`)
 

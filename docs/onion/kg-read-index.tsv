@@ -1,1 +1,5 @@
 .claude/.onion-version	ONION_INSTALLED	docs/onion/graph/onion-adoption.kg.yaml
+.claude/sessions/zoho-projects-adapter/zoho-v3-endpoints.json	EV_ZOHO_V3_DOCS	docs/onion/graph/zoho-projects-adapter.kg.yaml
+.claude/utils/task-manager/adapters/zoho-projects.md	EV_ADVERSARIAL_PASS_PR3	docs/onion/graph/zoho-projects-adapter.kg.yaml
+docs/evolution/inbox/2026-09-30-adapter-zoho-projects-provider.md	T_CORELAY	docs/onion/graph/zoho-projects-adapter.kg.yaml
+docs/technical-context/decisions/adr-zoho-projects-task-mapping.md	D_ZOHO_MAPPING	docs/onion/graph/zoho-projects-adapter.kg.yaml

@@ -44,7 +44,7 @@ task-manager/
 No `.env`:
 ```bash
 # Provider ativo (obrigatório)
-TASK_MANAGER_PROVIDER=clickup   # clickup | asana | jira | linear | none
+TASK_MANAGER_PROVIDER=clickup   # clickup | asana | jira | linear | zoho-projects | none
 
 # Transporte (opcional — default: api)
 TASK_MANAGER_TRANSPORT=api      # api (default) | mcp
@@ -113,6 +113,7 @@ Comando Onion
 - [Adapter Asana](./adapters/asana.md)
 - [Adapter Jira](./adapters/jira.md)
 - [Adapter Linear](./adapters/linear.md)
+- [Adapter Zoho Projects](./adapters/zoho-projects.md) — REST V3, OAuth com refresh, id composto `<project_id>.<task_id>`
 
 ## Documentação relacionada
 

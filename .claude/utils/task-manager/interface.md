@@ -11,7 +11,7 @@ Define o contrato que todos os adapters de gerenciadores de tarefas devem implem
 ```typescript
 /**
  * Interface abstrata para gerenciadores de tarefas.
- * Todos os adapters (ClickUp, Asana, Linear) devem implementar esta interface.
+ * Todos os adapters (ClickUp, Asana, Jira, Linear, Zoho Projects) devem implementar esta interface.
  */
 interface ITaskManager {
   // ═══════════════════════════════════════════════════════════════════════════
@@ -19,7 +19,7 @@ interface ITaskManager {
   // ═══════════════════════════════════════════════════════════════════════════
   
   /**
-   * Nome do provedor: 'clickup' | 'asana' | 'jira' | 'linear' | 'none'
+   * Nome do provedor: 'clickup' | 'asana' | 'jira' | 'linear' | 'zoho-projects' | 'none'
    */
   readonly provider: TaskManagerProvider;
   
@@ -180,24 +180,27 @@ interface ITaskManager {
 
 ### Status
 
-| Interface | ClickUp | Asana | Jira | Linear |
-|-----------|---------|-------|------|--------|
-| `backlog` | "backlog" | - | "Backlog" | "Backlog" |
-| `todo` | "to do" | - | "To Do" | "Todo" |
-| `in_progress` | "in progress" | - | "In Progress" | "In Progress" |
-| `review` | "review" | - | "In Review" | "In Review" |
-| `done` | "done" | completed: true | "Done" | "Done" |
-| `closed` | "closed" | completed: true | "Closed" | "Canceled" |
-| `canceled` | "closed" | completed: true | "Cancelled" | "Canceled" |
+| Interface | ClickUp | Asana | Jira | Linear | Zoho Projects¹ |
+|-----------|---------|-------|------|--------|----------------|
+| `backlog` | "backlog" | - | "Backlog" | "Backlog" | "Backlog" |
+| `todo` | "to do" | - | "To Do" | "Todo" | "Open" |
+| `in_progress` | "in progress" | - | "In Progress" | "In Progress" | "In Progress" |
+| `review` | "review" | - | "In Review" | "In Review" | "In Review" |
+| `done` | "done" | completed: true | "Done" | "Done" | "Closed" |
+| `closed` | "closed" | completed: true | "Closed" | "Canceled" | "Closed" ⚠️ perda (= done) |
+| `canceled` | "closed" | completed: true | "Cancelled" | "Canceled" | "Cancelled" |
+
+¹ Status customizáveis por portal: resolvidos por nome normalizado em runtime, com fallback em
+`is_closed_type`. Tabela completa em [adapters/zoho-projects.md](./adapters/zoho-projects.md).
 
 ### Prioridade
 
-| Interface | ClickUp | Asana | Jira | Linear |
-|-----------|---------|-------|------|--------|
-| `urgent` | 1 | - | Highest | 1 |
-| `high` | 2 | - | High | 2 |
-| `normal` | 3 | - | Medium | 3 |
-| `low` | 4 | - | Low | 4 |
+| Interface | ClickUp | Asana | Jira | Linear | Zoho Projects |
+|-----------|---------|-------|------|--------|---------------|
+| `urgent` | 1 | - | Highest | 1 | high ⚠️ perda |
+| `high` | 2 | - | High | 2 | high |
+| `normal` | 3 | - | Medium | 3 | medium |
+| `low` | 4 | - | Low | 4 | low |
 
 ---
 
