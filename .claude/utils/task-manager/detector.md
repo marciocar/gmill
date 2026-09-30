@@ -159,17 +159,17 @@ function detectProviderFromTaskId(taskId: string): TaskManagerProvider | null {
   }
   
   const trimmedId = taskId.trim();
-  const configuredProvider = (process.env.TASK_MANAGER_PROVIDER || '').toLowerCase();
+  const configuredProvider = (process.env.TASK_MANAGER_PROVIDER || '').trim().toLowerCase();
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ZOHO PROJECTS — ANTES de todas as regras numéricas/alfanuméricas abaixo
   // (ADR docs/technical-context/decisions/adr-zoho-projects-task-mapping.md, Decisão 4)
-  // - Id composto <project_id>.<task_id>: inequívoco (nenhum outro provider usa ponto)
+  // - Id composto <project_id>.<task_id> (5+ dígitos cada lado): inequívoco (nenhum outro provider usa ponto)
   // - Id numérico puro (13 a 19 dígitos no Zoho) colide com ClickUp (9 chars),
   //   Jira (5-14 dígitos) e Asana (15+). Desempate: provider configurado.
   //   Com outro provider configurado, as regras abaixo seguem valendo.
   // ═══════════════════════════════════════════════════════════════════════════
-  if (/^\d+\.\d+$/.test(trimmedId)) {
+  if (/^\d{5,}\.\d{5,}$/.test(trimmedId)) {   // 5+ dígitos por lado: '1.0'/'2026.09' não são Zoho
     return 'zoho-projects';
   }
   if (configuredProvider === 'zoho-projects' && /^\d{5,}$/.test(trimmedId)) {

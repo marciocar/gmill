@@ -27,7 +27,7 @@ ZOHO_CLIENT_SECRET=xxxxx
 ZOHO_REFRESH_TOKEN=1000.xxxxx.xxxxx     # vem só na troca inicial do grant code
 
 # Data center — obrigatória (define os hosts; nunca hardcode o US)
-ZOHO_ACCOUNTS_URL=https://accounts.zoho.com    # .eu · .in · .com.au · .jp · .ca · .sa · .uk …
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.com    # .eu · .in · .com.au · .jp · .uk · .sa · .ae · .sg · .com.cn · Canadá: https://accounts.zohocloud.ca
 
 # Portal — obrigatória
 ZOHO_PORTAL_ID=123456789
@@ -56,11 +56,11 @@ resolve e-mail → ZPUID no filtro de `assignee`.
 ### Obter as credenciais
 
 1. <https://api-console.zoho.com> → **Self Client** → gerar o *grant code* com os escopos acima.
-   O código expira em cerca de 3 min.
+   A validade do código é escolhida no console (minutos): troque-o logo.
 2. Trocar pelo par de tokens **imediatamente** (o host é o do DC do portal):
    `POST {ZOHO_ACCOUNTS_URL}/oauth/v2/token` com `grant_type=authorization_code`.
-3. Guardar o `refresh_token` no `.env`. O `api_domain` da resposta confirma o DC.
-4. `ZOHO_PORTAL_ID`: `GET {api_domain}/api/v3/portals`.
+3. Guardar o `refresh_token` no `.env`.
+4. `ZOHO_PORTAL_ID`: `GET https://projects.zoho{dc}/api/v3/portals` (host do Projects, **não** o `api_domain`).
 
 Guiado por `/meta:setup-integration` (opção Zoho Projects).
 
@@ -80,7 +80,7 @@ Guiado por `/meta:setup-integration` (opção Zoho Projects).
 | O quê | Valor |
 |---|---|
 | Accounts (token) | `ZOHO_ACCOUNTS_URL` (por DC) |
-| API | o `api_domain` devolvido pelo token (ex.: `https://www.zohoapis.com`) → a API do Projects é `https://projects.zoho{tld}`, onde `{tld}` é o do DC `[A VERIFICAR: derivar do api_domain ou do accounts]` |
+| API | `https://projects.zoho{dc}` derivado de `ZOHO_ACCOUNTS_URL` (Canadá: `projects.zohocloud.ca`). **Não** o `api_domain` do token (`www.zohoapis.*` responde 404 para o Projects, medido) |
 | Prefixo | `/api/v3/portal/{portal_id}`; **exceto users**: `/api/v3.1/portal/{portal_id}/users` |
 | Header | `Authorization: Bearer {access_token}` (o Projects V3 documenta `Bearer`; o CRM usa `Zoho-oauthtoken`, não misturar) |
 
@@ -92,7 +92,8 @@ O prefixo de versão é **por endpoint**, nunca global (ADR, Decisão 1).
 
 Toda rota de task exige o `project_id`, e não existe rota de task só pelo portal. Por isso:
 
-- **`taskId` da interface = `<project_id>.<task_id>`** (ex.: `1752587000000097024.1752587000000097101`).
+- **`taskId` da interface = `<project_id>.<task_id>`** (ex.: `1752587000000097024.1752587000000097101`),
+  com 5 ou mais dígitos em cada lado (`1.0` ou `2026.09` não são id Zoho).
 - O adapter **monta** o id composto ao normalizar e **decompõe** ao chamar a API.
 - Um id numérico **puro** só é aceito se houver `ZOHO_DEFAULT_PROJECT_ID`. Sem ele, o adapter lança erro
   explícito pedindo o id composto.
@@ -102,7 +103,7 @@ Toda rota de task exige o `project_id`, e não existe rota de task só pelo port
 ```typescript
 function splitTaskId(taskId: string, defaultProjectId?: string): { projectId: string; taskId: string } {
   const id = taskId.trim();
-  const composite = /^(\d+)\.(\d+)$/.exec(id);
+  const composite = /^(\d{5,})\.(\d{5,})$/.exec(id);   // ids Zoho têm 13-19 dígitos
   if (composite) return { projectId: composite[1], taskId: composite[2] };
   if (/^\d{5,}$/.test(id)) {
     if (defaultProjectId) return { projectId: defaultProjectId, taskId: id };
@@ -140,7 +141,17 @@ class ZohoClient {
   private expiresAt = 0;        // epoch ms
   private apiBase?: string;     // https://projects.zoho{tld}
 
-  constructor(private cfg: ZohoConfig) {}
+  constructor(private cfg: ZohoConfig) {
+    // S5: normaliza e valida o host de accounts (barra final, esquema, formato do DC)
+    this.cfg = { ...cfg, accountsUrl: (cfg.accountsUrl ?? '').trim().replace(/\/+$/, '') };
+    if (!/^https:\/\/accounts\.zoho(cloud)?\.[a-z]{2,3}(\.[a-z]{2})?$/.test(this.cfg.accountsUrl)) {
+      throw new Error(
+        `❌ ZOHO_ACCOUNTS_URL inválida: "${cfg.accountsUrl}". ` +
+        `Esperado https://accounts.zoho.<dc> (.com, .eu, .in, .com.au, .jp, .uk, .sa, .ae, .sg, .com.cn) ` +
+        `ou https://accounts.zohocloud.ca (Canadá).`
+      );
+    }
+  }
 
   /** Renova o access token. O endpoint responde HTTP 200 MESMO NA FALHA: checar o corpo. */
   private async refresh(): Promise<void> {
@@ -154,7 +165,7 @@ class ZohoClient {
         grant_type: 'refresh_token'
       })
     });
-    const json = await res.json().catch(() => ({}));
+    const json: any = safeJson(await res.text());
     // Medido 2026-09-30: credencial inválida → HTTP 200 + {"error":"invalid_client"}
     if (!res.ok || json.error || !json.access_token) {
       throw new Error(
@@ -163,9 +174,12 @@ class ZohoClient {
       );   // nunca incluir os valores dos segredos na mensagem
     }
     this.accessToken = json.access_token;
-    // renovação proativa ~5 min antes (expires_in = 3600 s)
-    this.expiresAt = Date.now() + (Number(json.expires_in ?? 3600) - 300) * 1000;
-    this.apiBase ??= deriveProjectsBase(json.api_domain, this.cfg.accountsUrl);
+    // renovação proativa ~5 min antes. S4: expires_in inválido ou curto demais → 3600
+    // (o Zoho permite só 10 renovações a cada 10 min por token)
+    const ttl = Number(json.expires_in);
+    const seconds = Number.isFinite(ttl) && ttl >= 600 ? ttl : 3600;
+    this.expiresAt = Date.now() + (seconds - 300) * 1000;
+    this.apiBase ??= deriveProjectsBase(this.cfg.accountsUrl);
   }
 
   private async token(): Promise<string> {
@@ -177,7 +191,8 @@ class ZohoClient {
    * Chamada à API. Regras (medidas e da doc):
    * - 401 INVALID_OAUTHTOKEN → token expirado/inválido: renova UMA vez e repete.
    * - 401 INVALID_TICKET → header ausente = bug do adapter: NÃO renova (evita loop), lança.
-   * - 429 / bloqueio de rate limit → respeita Retry-After; o bloqueio é de 10 min por endpoint.
+   * - 429 / bloqueio de rate limit → lança erro INFORMANDO o Retry-After (não espera nem repete);
+   *   o bloqueio é de 10 min por endpoint.
    * - Erro tem dois formatos: {error:{title,status_code,details}} e {error:{code,message}}.
    */
   async call<T = any>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
@@ -192,7 +207,7 @@ class ZohoClient {
     });
 
     if (res.status === 204) return undefined as T;           // Delete Task
-    const json: any = await res.json().catch(() => ({}));
+    const json: any = safeJson(await res.text());
     if (res.ok && !json?.error) return json as T;
 
     const err = json?.error ?? {};
@@ -209,24 +224,59 @@ class ZohoClient {
     throw new Error(`❌ Zoho ${method} ${path}: ${title} ${detail}`.trim());
   }
 
-  async paginate<T = any>(path: string, key: string | null, params: Record<string, string> = {}, max = 1000): Promise<T[]> {
+  /**
+   * Pagina uma listagem. `key` é a chave do array no envelope ({page_info, <key>: [...]}).
+   * H1: a doc oficial mostra os DOIS formatos para a mesma listagem (array cru na amostra da
+   * operação; envelope na seção de paginação/migração) → aceita ambos e LANÇA se não for nenhum,
+   * em vez de devolver [] em silêncio.
+   */
+  async paginate<T = any>(path: string, key: string, params: Record<string, string> = {}, max = 1000): Promise<T[]> {
     const out: T[] = [];
+    let prevFirst: string | undefined;
     for (let page = 1; out.length < max; page++) {
       const qs = new URLSearchParams({ ...params, page: String(page), per_page: '200' });
       const json: any = await this.call('GET', `${path}?${qs}`);
-      const items: T[] = key ? (json?.[key] ?? []) : (Array.isArray(json) ? json : []);
+      const items: T[] | undefined =
+        Array.isArray(json?.[key]) ? json[key] : Array.isArray(json) ? json : undefined;
+      if (!items) {
+        throw new Error(`❌ Zoho GET ${path}: resposta sem "${key}" nem array (formato inesperado)`);
+      }
+      // guarda de repetição: servidor que ignora `page` devolveria a MESMA página para sempre
+      // (até `max` chamadas → estouro do rate limit). Mesma 1ª entrada da página anterior = fim.
+      const first = items.length ? JSON.stringify((items[0] as any)?.id ?? items[0]) : undefined;
+      if (page > 1 && first !== undefined && first === prevFirst) return out.slice(0, max);
+      prevFirst = first;
       out.push(...items);
-      const hasNext = json?.page_info?.has_next_page ?? items.length === 200;
-      if (!hasNext || items.length === 0) break;
+      // S3: só segue com has_next_page === true (booleano). Sem page_info, segue até página vazia
+      // (o servidor pode limitar per_page abaixo de 200 — contar 200 truncaria em silêncio)
+      const next = json?.page_info ? json.page_info.has_next_page === true : items.length > 0;
+      if (!next || items.length === 0) return out.slice(0, max);
     }
+    console.warn(`⚠️ Zoho: listagem de ${path} truncada em ${max} itens`);
     return out.slice(0, max);
   }
 }
 
-/** Host da API do Projects a partir do DC. [A VERIFICAR contra o portal real — P1] */
-function deriveProjectsBase(apiDomain: string | undefined, accountsUrl: string): string {
-  const tld = new URL(accountsUrl).hostname.replace(/^accounts\.zoho/, '');   // ".com", ".eu", ".com.au"…
-  return `https://projects.zoho${tld}`;
+/** Host da API do Projects a partir do DC de accounts (validado em .com, .eu e zohocloud.ca). */
+function deriveProjectsBase(accountsUrl: string): string {
+  // accountsUrl já validada no construtor do ZohoClient. O api_domain do token (www.zohoapis.*)
+  // NÃO serve para o Projects: medido 2026-09-30, zohoapis.com/api/v3/portals → 404,
+  // projects.zoho.com/api/v3/portals → 401 (rota existe). Canadá: accounts.zohocloud.ca → projects.zohocloud.ca
+  const suffix = new URL(accountsUrl).hostname.replace(/^accounts\.zoho/, '');   // ".com", ".eu", "cloud.ca"…
+  return `https://projects.zoho${suffix}`;
+}
+
+/**
+ * S9: JSON.parse perde precisão em inteiros acima de 2^53. A doc traz ids quase sempre como
+ * string, mas há amostras com id numérico → citar inteiros longos antes de parsear.
+ */
+function safeJson(text: string): any {
+  if (!text) return {};
+  try {
+    return JSON.parse(text.replace(/(:\s*)(\d{16,})(?=\s*[,}\]])/g, '$1"$2"'));
+  } catch {
+    return { error: { title: 'INVALID_JSON', message: text.slice(0, 120) } };
+  }
 }
 ```
 
@@ -242,7 +292,7 @@ class ZohoProjectsAdapter implements ITaskManager {
   readonly isConfigured: boolean;
 
   private client: ZohoClient;
-  private statusCache?: Array<{ id: string; name: string }>;   // cache por sessão
+  private statusCache?: Promise<Array<{ id: string; name: string }>>;   // cache por sessão (promessa)
 
   constructor(private cfg: ZohoConfig) {
     this.isConfigured = !!(cfg.clientId && cfg.clientSecret && cfg.refreshToken && cfg.accountsUrl && cfg.portalId);
@@ -277,12 +327,15 @@ class ZohoProjectsAdapter implements ITaskManager {
   }
 
   async deleteTask(taskId: string): Promise<boolean> {
-    const { projectId, taskId: tid } = splitTaskId(taskId, this.cfg.defaultProjectId);
+    let ids: { projectId: string; taskId: string };
+    try { ids = splitTaskId(taskId, this.cfg.defaultProjectId); } catch { return false; }   // id inválido → false
     try {
-      await this.client.call('DELETE', `${this.base}/projects/${projectId}/tasks/${tid}`);   // 204
+      await this.client.call('DELETE', `${this.base}/projects/${ids.projectId}/tasks/${ids.taskId}`);   // 204
       return true;
-    } catch {
-      return false;
+    } catch (e: any) {
+      // só "não existe" vira false; auth, rate limit e rede PROPAGAM (não são "deleção negada")
+      if (/RESOURCE_NOT_FOUND|6404|HTTP_404/.test(String(e?.message))) return false;
+      throw e;
     }
   }
 
@@ -341,10 +394,12 @@ class ZohoProjectsAdapter implements ITaskManager {
     const criteria: Array<Record<string, unknown>> = [];
     if (query.text) criteria.push({ field_name: 'name', criteria_condition: 'contains', value: [query.text] });
     if (query.status?.length) {
-      const ids = await Promise.all(query.status.map(s => this.resolveStatusId(s)));
-      criteria.push({ field_name: 'status', criteria_condition: 'is', value: ids });
+      // todos os status do portal que casam (ex.: "Closed" E "Completed" para done)
+      const ids = (await Promise.all(query.status.map(s => this.resolveStatusIds(s)))).flat();
+      criteria.push({ field_name: 'status', criteria_condition: 'is', value: [...new Set(ids)] });
     }
     if (query.priority?.length) {
+      // [A VERIFICAR] a doc de filtros pede ID de opção para picklist; prioridade por nome não tem exemplo
       criteria.push({ field_name: 'priority', criteria_condition: 'is', value: query.priority.map(p => this.mapPriorityToZoho(p)) });
     }
     if (query.assignee) {
@@ -374,7 +429,7 @@ class ZohoProjectsAdapter implements ITaskManager {
 
   async getProjectList(): Promise<ProjectOutput[]> {
     // Get All Projects devolve um ARRAY cru
-    const projects = await this.client.paginate(`${this.base}/projects`, null);
+    const projects = await this.client.paginate(`${this.base}/projects`, 'projects');
     return projects.map((p: any) => this.normalizeProject(p));
   }
 
@@ -389,7 +444,7 @@ class ZohoProjectsAdapter implements ITaskManager {
 
   validateTaskId(taskId: string): boolean {
     const id = taskId.trim();
-    return /^\d+\.\d+$/.test(id) || (/^\d{5,}$/.test(id) && !!this.cfg.defaultProjectId);
+    return /^\d{5,}\.\d{5,}$/.test(id) || (/^\d{5,}$/.test(id) && !!this.cfg.defaultProjectId);
   }
 
   getProviderFromTaskId(taskId: string): TaskManagerProvider | null {
@@ -421,8 +476,14 @@ class ZohoProjectsAdapter implements ITaskManager {
     return body;
   }
 
-  private normalizeTask(raw: any, projectIdHint: string): TaskOutput {
-    const projectId = raw?.project?.id ?? projectIdHint;
+  private normalizeTask(input: any, projectIdHint: string): TaskOutput {
+    // H2: desembrulha {tasks:[...]} e REJEITA resposta sem id numérico (200 com corpo inesperado
+    // não pode virar sucesso com id "…undefined")
+    const raw = Array.isArray(input?.tasks) ? input.tasks[0] : Array.isArray(input) ? input[0] : input;
+    if (!/^\d+$/.test(String(raw?.id ?? ''))) {
+      throw new Error(`❌ Zoho: resposta de task sem id válido (${JSON.stringify(input)?.slice(0, 120)})`);
+    }
+    const projectId = String(raw?.project?.id ?? projectIdHint);
     const tasklistId = raw?.tasklist?.id;
     return {
       id: joinTaskId(projectId, raw.id),
@@ -488,16 +549,28 @@ class ZohoProjectsAdapter implements ITaskManager {
     return status?.is_closed_type ? 'done' : 'todo';
   }
 
+  /** Busca: TODOS os status.id do portal que casam com o status da interface. */
+  private async resolveStatusIds(status: TaskStatus): Promise<string[]> {
+    const target = status === 'closed' ? 'done' : status;
+    this.statusCache ??= this.client.paginate(`${this.base}/settings/global-statuses`, 'statuses', { module: 'tasks' });
+    const wanted = ZohoProjectsAdapter.STATUS_NAMES[target as Exclude<TaskStatus, 'closed'>];
+    const ids = (await this.statusCache).filter(s => wanted.includes(ZohoProjectsAdapter.norm(s.name))).map(s => s.id);
+    if (!ids.length) throw new Error(`❌ Nenhum status do portal casa com "${status}" (ajuste STATUS_NAMES)`);
+    return ids;
+  }
+
   /** Escrita: interface → status.id, pela lista paginada de global-statuses (cache por sessão). */
   private async resolveStatusId(status: TaskStatus): Promise<string> {
     const target = status === 'closed' ? 'done' : status;           // perda closed→done registrada no ADR
-    this.statusCache ??= await this.client.paginate(`${this.base}/settings/global-statuses`, null, { module: 'tasks' });
+    // S7: guarda a PROMESSA, não o resultado → chamadas concorrentes compartilham um fetch só
+    this.statusCache ??= this.client.paginate(`${this.base}/settings/global-statuses`, 'statuses', { module: 'tasks' });
+    const statuses = await this.statusCache;
     const wanted = ZohoProjectsAdapter.STATUS_NAMES[target as Exclude<TaskStatus, 'closed'>];
-    const hit = this.statusCache.find(s => wanted.includes(ZohoProjectsAdapter.norm(s.name)));
+    const hit = statuses.find(s => wanted.includes(ZohoProjectsAdapter.norm(s.name)));
     if (!hit) {
       throw new Error(
         `❌ Nenhum status do portal casa com "${status}". Disponíveis: ` +
-        this.statusCache.map(s => s.name).join(', ') + '. Ajuste STATUS_NAMES no adapter.'
+        statuses.map(s => s.name).join(', ') + '. Ajuste STATUS_NAMES no adapter.'
       );
     }
     return hit.id;
@@ -519,7 +592,7 @@ class ZohoProjectsAdapter implements ITaskManager {
 
   private async resolveZpuid(assignee: string): Promise<string> {
     if (!assignee.includes('@')) return assignee;                  // já é zpuid
-    const users: any[] = await this.client.paginate(`/api/v3.1/portal/${this.cfg.portalId}/users`, 'users');
+    const users: any[] = await this.client.paginate(`/api/v3.1/portal/${this.cfg.portalId}/users`, 'users');   // [A VERIFICAR] chave do envelope v3.1
     const u = users.find(x => x.email?.toLowerCase() === assignee.toLowerCase());
     if (!u) throw new Error(`❌ Usuário ${assignee} não encontrado no portal Zoho`);
     return u.zpuid ?? u.id;
@@ -594,10 +667,10 @@ Sem casamento na leitura: `is_closed_type=true` → `done`, `false` → `todo`. 
 | Task inexistente | 404, `{"error":{"code":6404,"message":"Resource Not Found"}}` (doc) | segundo formato de erro: tratado por `code`/`message` |
 | Rate limit | 429 + `Retry-After` (doc) | erro com o tempo de espera; bloqueio de 10 min por endpoint |
 
-- **Limites de token:** no máximo 10 renovações a cada 10 min por token e 20 refresh tokens por
-  usuário. Gerar refresh tokens demais invalida os antigos **sem aviso**. O cache (~55 min) evita
+- **Limites de token** (doc de OAuth da Zoho, <https://www.zoho.com/developer/oauth/token-limits.html>,
+  não a doc do Projects): no máximo 10 renovações a cada 10 min por token e 20 refresh tokens por usuário. Gerar refresh tokens demais invalida os antigos **sem aviso**. O cache (~55 min) evita
   renovar por chamada.
-- **Grant code** expira em cerca de 3 min: trocar logo após gerar.
+- **Grant code:** validade curta, escolhida no console. Trocar logo após gerar.
 
 ---
 

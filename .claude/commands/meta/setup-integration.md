@@ -126,14 +126,16 @@ ZOHO_REFRESH_TOKEN=1000.xxxxx.xxxxx
 ZOHO_ACCOUNTS_URL=https://accounts.zoho.com   # DC do portal
 ZOHO_PORTAL_ID=123456789
 ZOHO_DEFAULT_PROJECT_ID=                      # Opcional
+ZOHO_DEFAULT_TASKLIST_ID=                     # Opcional
+ZOHO_WEB_URL=                                 # Opcional
 ```
 
 **Como obter:**
 - **Self Client**: <https://api-console.zoho.com> → Self Client → grant code com os escopos de
-  `adapters/zoho-projects.md`. **Troque em ~3 min** por access + refresh token
+  `adapters/zoho-projects.md`. **Troque logo** (validade curta, escolhida no console) por access + refresh token
   (`POST {ZOHO_ACCOUNTS_URL}/oauth/v2/token`). Guarde só o refresh token.
-- **DC**: o `api_domain` da troca confirma a região; `ZOHO_ACCOUNTS_URL` tem que ser do mesmo DC.
-- **Portal ID**: `GET /api/v3/portals`.
+- **DC**: `ZOHO_ACCOUNTS_URL` é o accounts do DC do portal (`accounts.zoho.<dc>`; Canadá: `accounts.zohocloud.ca`).
+- **Portal ID**: `GET https://projects.zoho{dc}/api/v3/portals` (host do Projects; o `api_domain` do token não serve).
 - ⚠️ Sem MCP: o transporte é sempre `api`.
 - ⚠️ **LGPD:** um DC fora do Brasil implica transferência internacional dos dados das tasks.
 

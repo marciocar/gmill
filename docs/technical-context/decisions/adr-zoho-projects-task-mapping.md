@@ -46,7 +46,7 @@ pelo mapeamento abaixo (tasks, comments, projects, global-statuses) está em v3.
 **Todos os 12 métodos do `ITaskManager` que dependem de API têm endpoint na V3.** Os outros dois
 são locais.
 
-Prefixo comum: `{api_domain}/api/v3/portal/{portal_id}`
+Prefixo comum: `https://projects.zoho{dc}/api/v3/portal/{portal_id}`. O host vem do DC de accounts, **não** do `api_domain` do token (`www.zohoapis.*` responde 404 para o Projects; medido na implementação, SAC-60)
 
 | Método | Verbo + rota | Escopo OAuth | Âncora |
 |---|---|---|---|
