@@ -43,7 +43,8 @@ function detectTransport(): TaskManagerTransport {
  * @returns Configuração do provedor ativo (inclui campo `transport`)
  */
 function detectProvider(): ProviderConfig {
-  const provider = (process.env.TASK_MANAGER_PROVIDER || 'none') as TaskManagerProvider;
+  // trim + lowercase: o mesmo normalizado que detectProviderFromTaskId usa (' Zoho-Projects' ≠ fallback silencioso p/ none)
+  const provider = ((process.env.TASK_MANAGER_PROVIDER || 'none').trim().toLowerCase()) as TaskManagerProvider;
   const requestedTransport = detectTransport();
 
   /**
@@ -169,7 +170,7 @@ function detectProviderFromTaskId(taskId: string): TaskManagerProvider | null {
   //   Jira (5-14 dígitos) e Asana (15+). Desempate: provider configurado.
   //   Com outro provider configurado, as regras abaixo seguem valendo.
   // ═══════════════════════════════════════════════════════════════════════════
-  if (/^\d{5,}\.\d{5,}$/.test(trimmedId)) {   // 5+ dígitos por lado: '1.0'/'2026.09' não são Zoho
+  if (/^[1-9]\d{4,}\.[1-9]\d{4,}$/.test(trimmedId)) {   // 5+ dígitos por lado, sem zero à esquerda: '1.0'/'2026.09' não são Zoho
     return 'zoho-projects';
   }
   if (configuredProvider === 'zoho-projects' && /^\d{5,}$/.test(trimmedId)) {

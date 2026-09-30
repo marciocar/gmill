@@ -103,9 +103,9 @@ Toda rota de task exige o `project_id`, e não existe rota de task só pelo port
 ```typescript
 function splitTaskId(taskId: string, defaultProjectId?: string): { projectId: string; taskId: string } {
   const id = taskId.trim();
-  const composite = /^(\d{5,})\.(\d{5,})$/.exec(id);   // ids Zoho têm 13-19 dígitos
+  const composite = /^([1-9]\d{4,})\.([1-9]\d{4,})$/.exec(id);   // ids Zoho: 13-19 dígitos, sem zero à esquerda
   if (composite) return { projectId: composite[1], taskId: composite[2] };
-  if (/^\d{5,}$/.test(id)) {
+  if (/^[1-9]\d{4,}$/.test(id)) {
     if (defaultProjectId) return { projectId: defaultProjectId, taskId: id };
     throw new Error(
       `❌ Id Zoho "${id}" sem projeto. Use o id composto <project_id>.<task_id> ` +
@@ -143,8 +143,11 @@ class ZohoClient {
 
   constructor(private cfg: ZohoConfig) {
     // S5: normaliza e valida o host de accounts (barra final, esquema, formato do DC)
-    this.cfg = { ...cfg, accountsUrl: (cfg.accountsUrl ?? '').trim().replace(/\/+$/, '') };
-    if (!/^https:\/\/accounts\.zoho(cloud)?\.[a-z]{2,3}(\.[a-z]{2})?$/.test(this.cfg.accountsUrl)) {
+    this.cfg = {
+      ...cfg,
+      accountsUrl: (cfg.accountsUrl ?? '').trim().toLowerCase().replace(/:443(?=\/|$)/, '').replace(/\/+$/, '')
+    };
+    if (!ZOHO_ACCOUNTS_HOSTS.includes(this.cfg.accountsUrl)) {
       throw new Error(
         `❌ ZOHO_ACCOUNTS_URL inválida: "${cfg.accountsUrl}". ` +
         `Esperado https://accounts.zoho.<dc> (.com, .eu, .in, .com.au, .jp, .uk, .sa, .ae, .sg, .com.cn) ` +
@@ -167,6 +170,11 @@ class ZohoClient {
     });
     const json: any = safeJson(await res.text());
     // Medido 2026-09-30: credencial inválida → HTTP 200 + {"error":"invalid_client"}
+    if (json.error === 'Access Denied') {
+      // Medido 2026-09-30: excesso de pedidos ao token → HTTP 400 + {"error":"Access Denied",
+      // "error_description":"You have made too many requests continuously…"}. Não é credencial errada.
+      throw new Error('❌ Zoho OAuth: limite de pedidos de token atingido (10 a cada 10 min por app). Aguarde e tente de novo.');
+    }
     if (!res.ok || json.error || !json.access_token) {
       throw new Error(
         `❌ Zoho OAuth: falha ao renovar o token (${json.error ?? `HTTP ${res.status}`}). ` +
@@ -175,7 +183,7 @@ class ZohoClient {
     }
     this.accessToken = json.access_token;
     // renovação proativa ~5 min antes. S4: expires_in inválido ou curto demais → 3600
-    // (o Zoho permite só 10 renovações a cada 10 min por token)
+    // (o Zoho permite só 10 pedidos de access token a cada 10 min por app)
     const ttl = Number(json.expires_in);
     const seconds = Number.isFinite(ttl) && ttl >= 600 ? ttl : 3600;
     this.expiresAt = Date.now() + (seconds - 300) * 1000;
@@ -218,10 +226,16 @@ class ZohoClient {
     }
     if (res.status === 429) {
       const wait = res.headers.get('Retry-After');
-      throw new Error(`❌ Zoho rate limit em ${path}. Retry-After: ${wait ?? '?'} s (o bloqueio pode durar 10 min).`);
+      throw Object.assign(
+        new Error(`❌ Zoho rate limit em ${path}. Retry-After: ${wait ?? '?'} s (o bloqueio pode durar 10 min).`),
+        { status: 429, retryAfter: wait }
+      );
     }
     const detail = err.details?.[0]?.message ?? err.message ?? '';
-    throw new Error(`❌ Zoho ${method} ${path}: ${title} ${detail}`.trim());
+    // N2: erro TIPADO — quem decide por status/código lê os campos, nunca a mensagem (que traz o path)
+    throw Object.assign(new Error(`❌ Zoho ${method} ${path}: ${title} ${detail}`.trim()), {
+      status: res.status, code: err.code, title
+    });
   }
 
   /**
@@ -232,30 +246,48 @@ class ZohoClient {
    */
   async paginate<T = any>(path: string, key: string, params: Record<string, string> = {}, max = 1000): Promise<T[]> {
     const out: T[] = [];
-    let prevFirst: string | undefined;
-    for (let page = 1; out.length < max; page++) {
+    let prevPage: string | undefined;
+    let sawPageInfo = false;
+    const MAX_PAGES = 50;                              // S3: teto de chamadas, mesmo com has_next_page mentindo
+    for (let page = 1; out.length < max && page <= MAX_PAGES; page++) {
       const qs = new URLSearchParams({ ...params, page: String(page), per_page: '200' });
-      const json: any = await this.call('GET', `${path}?${qs}`);
+      let json: any;
+      try {
+        json = await this.call('GET', `${path}?${qs}`);
+      } catch (e) {
+        // N5: sem page_info, a página além do fim pode vir como erro → fica com o que já leu
+        if (page > 1 && !sawPageInfo) return out.slice(0, max);
+        throw e;
+      }
+      if (json?.page_info) sawPageInfo = true;
       const items: T[] | undefined =
         Array.isArray(json?.[key]) ? json[key] : Array.isArray(json) ? json : undefined;
       if (!items) {
         throw new Error(`❌ Zoho GET ${path}: resposta sem "${key}" nem array (formato inesperado)`);
       }
-      // guarda de repetição: servidor que ignora `page` devolveria a MESMA página para sempre
-      // (até `max` chamadas → estouro do rate limit). Mesma 1ª entrada da página anterior = fim.
-      const first = items.length ? JSON.stringify((items[0] as any)?.id ?? items[0]) : undefined;
-      if (page > 1 && first !== undefined && first === prevFirst) return out.slice(0, max);
-      prevFirst = first;
+      // guarda de repetição: servidor que ignora `page` devolveria a MESMA página para sempre.
+      // N4: compara a página INTEIRA (não só o 1º item) — páginas distintas idênticas são implausíveis.
+      const sig = items.length ? JSON.stringify(items) : undefined;
+      if (page > 1 && sig !== undefined && sig === prevPage) return out.slice(0, max);
+      prevPage = sig;
       out.push(...items);
       // S3: só segue com has_next_page === true (booleano). Sem page_info, segue até página vazia
       // (o servidor pode limitar per_page abaixo de 200 — contar 200 truncaria em silêncio)
       const next = json?.page_info ? json.page_info.has_next_page === true : items.length > 0;
       if (!next || items.length === 0) return out.slice(0, max);
     }
-    console.warn(`⚠️ Zoho: listagem de ${path} truncada em ${max} itens`);
+    console.warn(`⚠️ Zoho: listagem de ${path} truncada (${max} itens ou ${MAX_PAGES} páginas)`);
     return out.slice(0, max);
   }
 }
+
+/** DCs do Zoho (lista explícita: regex aceitava DC inexistente). Canadá usa zohocloud.ca. */
+const ZOHO_ACCOUNTS_HOSTS = [
+  'https://accounts.zoho.com', 'https://accounts.zoho.eu', 'https://accounts.zoho.in',
+  'https://accounts.zoho.com.au', 'https://accounts.zoho.jp', 'https://accounts.zoho.uk',
+  'https://accounts.zoho.sa', 'https://accounts.zoho.ae', 'https://accounts.zoho.sg',
+  'https://accounts.zoho.com.cn', 'https://accounts.zohocloud.ca'
+];
 
 /** Host da API do Projects a partir do DC de accounts (validado em .com, .eu e zohocloud.ca). */
 function deriveProjectsBase(accountsUrl: string): string {
@@ -268,12 +300,36 @@ function deriveProjectsBase(accountsUrl: string): string {
 
 /**
  * S9: JSON.parse perde precisão em inteiros acima de 2^53. A doc traz ids quase sempre como
- * string, mas há amostras com id numérico → citar inteiros longos antes de parsear.
+ * string, mas há amostras com id numérico → cita inteiros longos antes de parsear.
+ * N1: varredura que RESPEITA strings (regex corrompia descrição com "NF: 1234…"); cobre
+ * valores em objeto, em array e negativos. Só inteiros com 16+ dígitos fora de string.
  */
 function safeJson(text: string): any {
   if (!text) return {};
+  let out = '';
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (c === '\\') { out += text[++i] ?? ''; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; out += c; continue; }
+    if (c === '-' || (c >= '0' && c <= '9')) {
+      let j = i + (c === '-' ? 1 : 0);
+      while (j < text.length && text[j] >= '0' && text[j] <= '9') j++;
+      const isInt = !/[.eE]/.test(text[j] ?? '');
+      const digits = j - i - (c === '-' ? 1 : 0);
+      out += isInt && digits >= 16 ? `"${text.slice(i, j)}"` : text.slice(i, j);
+      i = j - 1;
+      continue;
+    }
+    out += c;
+  }
   try {
-    return JSON.parse(text.replace(/(:\s*)(\d{16,})(?=\s*[,}\]])/g, '$1"$2"'));
+    return JSON.parse(out);
   } catch {
     return { error: { title: 'INVALID_JSON', message: text.slice(0, 120) } };
   }
@@ -334,7 +390,7 @@ class ZohoProjectsAdapter implements ITaskManager {
       return true;
     } catch (e: any) {
       // só "não existe" vira false; auth, rate limit e rede PROPAGAM (não são "deleção negada")
-      if (/RESOURCE_NOT_FOUND|6404|HTTP_404/.test(String(e?.message))) return false;
+      if (e?.status === 404 || e?.code === 6404 || e?.title === 'RESOURCE_NOT_FOUND') return false;
       throw e;
     }
   }
@@ -444,7 +500,7 @@ class ZohoProjectsAdapter implements ITaskManager {
 
   validateTaskId(taskId: string): boolean {
     const id = taskId.trim();
-    return /^\d{5,}\.\d{5,}$/.test(id) || (/^\d{5,}$/.test(id) && !!this.cfg.defaultProjectId);
+    return /^[1-9]\d{4,}\.[1-9]\d{4,}$/.test(id) || (/^[1-9]\d{4,}$/.test(id) && !!this.cfg.defaultProjectId);
   }
 
   getProviderFromTaskId(taskId: string): TaskManagerProvider | null {
@@ -549,12 +605,22 @@ class ZohoProjectsAdapter implements ITaskManager {
     return status?.is_closed_type ? 'done' : 'todo';
   }
 
+  /**
+   * Lista de status do portal, com cache por sessão. S7: guarda a PROMESSA (chamadas concorrentes
+   * compartilham um fetch). N3: promessa REJEITADA sai do cache (um 429 não inutiliza a sessão).
+   */
+  private loadStatuses(): Promise<Array<{ id: string; name: string }>> {
+    this.statusCache ??= this.client
+      .paginate<{ id: string; name: string }>(`${this.base}/settings/global-statuses`, 'statuses', { module: 'tasks' })
+      .catch(e => { this.statusCache = undefined; throw e; });
+    return this.statusCache;
+  }
+
   /** Busca: TODOS os status.id do portal que casam com o status da interface. */
   private async resolveStatusIds(status: TaskStatus): Promise<string[]> {
     const target = status === 'closed' ? 'done' : status;
-    this.statusCache ??= this.client.paginate(`${this.base}/settings/global-statuses`, 'statuses', { module: 'tasks' });
     const wanted = ZohoProjectsAdapter.STATUS_NAMES[target as Exclude<TaskStatus, 'closed'>];
-    const ids = (await this.statusCache).filter(s => wanted.includes(ZohoProjectsAdapter.norm(s.name))).map(s => s.id);
+    const ids = (await this.loadStatuses()).filter(s => wanted.includes(ZohoProjectsAdapter.norm(s.name))).map(s => s.id);
     if (!ids.length) throw new Error(`❌ Nenhum status do portal casa com "${status}" (ajuste STATUS_NAMES)`);
     return ids;
   }
@@ -562,9 +628,7 @@ class ZohoProjectsAdapter implements ITaskManager {
   /** Escrita: interface → status.id, pela lista paginada de global-statuses (cache por sessão). */
   private async resolveStatusId(status: TaskStatus): Promise<string> {
     const target = status === 'closed' ? 'done' : status;           // perda closed→done registrada no ADR
-    // S7: guarda a PROMESSA, não o resultado → chamadas concorrentes compartilham um fetch só
-    this.statusCache ??= this.client.paginate(`${this.base}/settings/global-statuses`, 'statuses', { module: 'tasks' });
-    const statuses = await this.statusCache;
+    const statuses = await this.loadStatuses();
     const wanted = ZohoProjectsAdapter.STATUS_NAMES[target as Exclude<TaskStatus, 'closed'>];
     const hit = statuses.find(s => wanted.includes(ZohoProjectsAdapter.norm(s.name)));
     if (!hit) {
@@ -662,13 +726,15 @@ Sem casamento na leitura: `is_closed_type=true` → `done`, `false` → `todo`. 
 | Situação | Resposta real | Tratamento |
 |---|---|---|
 | Refresh com credencial inválida | **HTTP 200** + `{"error":"invalid_client"}` | checar o **corpo**; erro sem vazar segredo |
+| Excesso de pedidos de token | **HTTP 400** + `{"error":"Access Denied","error_description":"You have made too many requests continuously…"}` | mensagem própria de rate limit (não "confira credenciais") |
 | API sem header de auth | 401, `title: INVALID_TICKET` | bug do adapter: **não** renova, lança |
 | API com token inválido/expirado | 401, `title: INVALID_OAUTHTOKEN` | renova **uma vez** e repete |
 | Task inexistente | 404, `{"error":{"code":6404,"message":"Resource Not Found"}}` (doc) | segundo formato de erro: tratado por `code`/`message` |
 | Rate limit | 429 + `Retry-After` (doc) | erro com o tempo de espera; bloqueio de 10 min por endpoint |
 
 - **Limites de token** (doc de OAuth da Zoho, <https://www.zoho.com/developer/oauth/token-limits.html>,
-  não a doc do Projects): no máximo 10 renovações a cada 10 min por token e 20 refresh tokens por usuário. Gerar refresh tokens demais invalida os antigos **sem aviso**. O cache (~55 min) evita
+  não a doc do Projects): no máximo 10 pedidos de access token a cada 10 min **por app** (client) e 20 refresh
+  tokens por usuário. Passar de 20 invalida o **mais antigo**, que pode ser o de outra integração. O cache (~55 min) evita
   renovar por chamada.
 - **Grant code:** validade curta, escolhida no console. Trocar logo após gerar.
 
