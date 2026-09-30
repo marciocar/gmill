@@ -1,6 +1,6 @@
 # Zoho Projects API — Knowledge Base
 
-> **Versão**: 1.1.0 | **Última atualização**: 2026-09-30 | **Categoria**: Platforms
+> **Versão**: 1.2.0 | **Última atualização**: 2026-09-30 | **Categoria**: Platforms
 > Referência técnica da **Zoho Projects REST API V3**: autenticação OAuth 2.0 (Self Client e
 > fluxo web), geração/renovação de tokens, data centers, escopos, paginação, rate limit e erros.
 > Tudo com fonte na documentação oficial da Zoho; o que extrapola a fonte está `[INFERÊNCIA]`.
@@ -11,11 +11,11 @@
 
 | Campo | Valor |
 |-------|-------|
-| **Versão** | 1.1.0 |
+| **Versão** | 1.2.0 |
 | **Data de Criação** | 2026-09-30 |
-| **Última Atualização** | 2026-09-30 (v1.1: endpoints de tarefa + webhooks/automação) |
+| **Última Atualização** | 2026-09-30 (v1.2: endpoints completos de tarefa/comentário/status/projeto, filtro de subtask, escopo `custom_fields.READ`; v1.1: endpoints de tarefa + webhooks/automação) |
 | **Categoria** | platforms |
-| **Versão da API** | V3 (`/api/v3/`) — a única viva desde 2026-01-01 |
+| **Versão da API** | V3 (`/api/v3/`) — a vigente desde 2026-01-01; alguns módulos (users, phases, issues) já estão em `/api/v3.1/` |
 | **Fontes Principais** | [1] <https://projects.zoho.com/api-docs> (V3, oficial) · [2] <https://www.zoho.com/accounts/protocol/oauth/self-client/overview.html> · [3] <https://www.zoho.com/accounts/protocol/oauth/self-client/authorization-code-flow.html> · [4] <https://www.zoho.com/accounts/protocol/oauth/web-apps/authorization.html> · [5] <https://www.zoho.com/accounts/protocol/oauth/multi-dc.html> · [6] <https://www.zoho.com/developer/oauth/token-limits.html> · [7] <https://www.zoho.com/projects/help/rest-api/zohoprojectsapi.html> (legado) · [8] <https://ascentbusiness.co.uk/zoho-projects-api-deadline-migrate-to-v3-by-31-december-2025/> · [9] <https://www.zoho.com/projects/taskautomation.html> · [10] <https://www.zoho.com/projects/zoho-flow-integrations.html> |
 
 ---
@@ -229,7 +229,7 @@ as operações explícitas.
 | Integração | Escopos |
 |---|---|
 | Leitura/BI | `ZohoProjects.portals.READ,ZohoProjects.projects.READ,ZohoProjects.tasks.READ,ZohoProjects.timesheets.READ,ZohoProjects.users.READ` |
-| Sync bidirecional de tasks | acima + `ZohoProjects.tasks.ALL,ZohoProjects.tasklists.READ,ZohoProjects.milestones.READ` |
+| Sync bidirecional de tasks | acima + `ZohoProjects.tasks.ALL,ZohoProjects.tasklists.READ,ZohoProjects.milestones.READ,ZohoProjects.custom_fields.READ` (o último resolve `status.id` via `global-statuses`) |
 
 > Token com escopo de Zoho Projects **não** funciona no Zoho BugTracker, e o contrário também vale [7].
 
@@ -295,6 +295,21 @@ Note: token expirado volta como **400, não 401**. Um cliente que só renova em 
 | Atualizar tarefa | `PATCH /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}` | `tasks.UPDATE` |
 | Comentar na tarefa | `POST /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}/comments` (`{"comment": "..."}`) | `tasks.CREATE` |
 | Listar tasklists | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasklists` | `tasklists.READ` |
+| Detalhe da tarefa | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}` | `tasks.READ` |
+| Excluir tarefa | `DELETE /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}` | `tasks.DELETE` |
+| Listar tarefas do projeto | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasks` (`page`, `per_page` ≤ 200, `filter`, `sort_by`) | `tasks.READ` |
+| Listar tarefas do portal | `GET /api/v3/portal/{portal_id}/tasks` (mesmos parâmetros; o exemplo de resposta **não** traz o projeto) | `tasks.READ` |
+| Listar comentários | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}/comments` | `tasks.READ` |
+| Detalhe do projeto | `GET /api/v3/portal/{portal_id}/projects/{project_id}` | `projects.READ` |
+| Status globais | `GET /api/v3/portal/{portal_id}/settings/global-statuses?module=tasks` (filtro `status_names`) | `custom_fields.READ` |
+
+> ⚠️ **Não existe rota de tarefa só pelo portal** (`/portal/{id}/tasks/{task_id}`): toda operação
+> numa tarefa exige o `project_id` [1].
+
+**Filtros de tarefa** (parâmetro `filter`, só no módulo Tasks) [1]:
+- Subtasks de um pai: `{"criteria":[{"field_name":"parent_task","criteria_condition":"is","value":["<task_id>"]}],"pattern":"1"}`
+- Só subtasks (ou só as de topo, com `false`): `field_name: "has_parents"`, `value: ["true"]`
+- O objeto task traz `depth` (0 = raiz), `parental_info.{parent_task_id, root_task_id}` e `status.{id, name, is_closed_type}`.
 
 Campos principais do **Create Task** [1]:
 
@@ -355,10 +370,13 @@ Campos principais do **Create Task** [1]:
 
 ## 🔗 Integração com o Sistema Onion
 
-- **Não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
+- **Ainda não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
   asana | linear | none` (ver [task-manager-abstraction](../concepts/task-manager-abstraction.md)).
   Operar tasks do Zoho via `/product:task` exigiria um **adapter novo** em
   `.claude/utils/task-manager/adapters/`, caminho de `/meta:create-abstraction` + sinal upstream ao core.
+  **Em andamento:** SAC-58. O mapeamento para `ITaskManager` (id composto `<project_id>.<task_id>`,
+  status, prioridade, cobertura dos métodos) está no
+  [ADR de mapeamento](../../technical-context/decisions/adr-zoho-projects-task-mapping.md).
 - **Segredos:** `ZOHO_*` no `.env`, carregado com `set -a; source .env; set +a`. Doutrina em
   [secret-handling-agent](../concepts/secret-handling-agent.md). Nunca imprimir o token em log ou chat.
 - **Configuração guiada:** `/meta:setup-integration` é o comando canônico para registrar as variáveis.
@@ -383,4 +401,4 @@ Campos principais do **Create Task** [1]:
 
 ---
 
-*Pesquisado e gerado em 2026-09-30 (v1.1 no mesmo dia: tarefas + automação) via `/meta:create-knowledge-base`. Nenhuma chamada real à API foi feita: os exemplos seguem a doc oficial e não foram executados contra um portal.*
+*Pesquisado e gerado em 2026-09-30 (no mesmo dia: v1.1 tarefas + automação; v1.2 cobertura completa para o adapter, conferida contra a doc oficial baixada) via `/meta:create-knowledge-base`. Nenhuma chamada real à API foi feita: os exemplos seguem a doc oficial e não foram executados contra um portal.*

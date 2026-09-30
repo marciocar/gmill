@@ -244,6 +244,7 @@ acompanhamentos, mas isso dobra o ruído. Comece sem espelhar.
   implementação. `/engineer:plan` se o middleware for código próprio.
 - **Validação**: o checklist acima segue a doutrina de testar modos de falha, não só o caminho feliz.
 - **KBs-base**: [glpi-api](../platforms/glpi-api.md) · [zoho-projects-api](../platforms/zoho-projects-api.md).
+- **ADR relacionado**: [adr-zoho-projects-task-mapping](../../technical-context/decisions/adr-zoho-projects-task-mapping.md), com o mapeamento do Zoho para o Task Manager do Onion (SAC-58). Ele não decide o middleware deste fluxo, mas fixa o id composto `<project_id>.<task_id>` e acrescenta o escopo `ZohoProjects.custom_fields.READ` (resolver `status.id` ao mudar status), que o Passo 5 (volta Zoho → GLPI) também precisa se atualizar status.
 
 ---
 
