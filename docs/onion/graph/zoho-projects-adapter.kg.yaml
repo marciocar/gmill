@@ -1,0 +1,199 @@
+---
+graph: zoho-projects-adapter
+title: "SAC-58 — adapter Zoho Projects como provider do Task Manager (plano-grafo)"
+layer: mixed
+created: 2026-09-30
+updated: 2026-09-30
+owner: gmill
+purpose: |
+  Plano-grafo da feature SAC-58. O plano vivo estava espalhado em Linear, worklog, ADR e chat, e o
+  /meta:realign de 2026-09-30 mostrou que o único grafo do repo (onion-adoption) não enxergava
+  nenhum nó deste trabalho: veredito ALINHADO porque o radar não o via. Este grafo é a fonte que o
+  /meta:drive conduz.
+  Leia com: bash .claude/validation/kg-drive-project.sh docs/onion/graph/zoho-projects-adapter.kg.yaml
+como_usar: |
+  DEPENDS_ON é GUARDA ("não faça B antes de A"): a aresta sai do dependente para o predecessor.
+  Os nós com drive_kind: decision esperam o maestro; o driver enquadra e propõe, não decide.
+---
+
+meta:
+  id: zoho-projects-adapter-gmill
+  schema_version: "1"
+  baseline: 2026-09-30
+  date: 2026-09-30
+  review_after: 2026-12-31
+
+nodes:
+  - id: G_SAC58
+    node_type: decision
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.8
+    verified_at: 2026-09-30
+    verified_against: linear-SAC-58-in-progress-0-de-5-criterios
+    drive_kind: execution
+    trace: "Linear SAC-58"
+    label: "OBJETIVO: TASK_MANAGER_PROVIDER=zoho-projects funciona em /product:task, /engineer:start e /engineer:work. Fecha quando os 5 critérios de aceite da SAC-58 estiverem provados. Os 1 a 3 (criar task/subtask/comentário no Zoho, refresh de token, base URL do DC) só se provam contra o portal real."
+
+  - id: D_ZOHO_MAPPING
+    node_type: decision
+    plane: PROD
+    status: done
+    impact: 5
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: adr-aceito-pelo-maestro-e-mergeado-pr-2-e1e0ec3
+    trace: docs/technical-context/decisions/adr-zoho-projects-task-mapping.md
+    label: "DECISÃO (ADR aceito): API V3, com users em v3.1; taskId = id composto <project_id>.<task_id>; detector com ^\\d+\\.\\d+$ + desempate ^\\d{5,}$ por provider, antes de ClickUp/Asana/Jira; status por nome com fallback is_closed_type e closed escrito como done; prioridade urgent→high, none→undefined."
+
+  - id: EV_ZOHO_V3_DOCS
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: projects-zoho-com-api-docs-baixada-523-operacoes-parseadas
+    trace: .claude/sessions/zoho-projects-adapter/zoho-v3-endpoints.json
+    label: "Doc oficial Zoho Projects V3 baixada (18,9 MB) e parseada: 523 operações com verbo, rota e escopo. Os 12 métodos do ITaskManager que dependem de API têm endpoint. Revisada por 2 passadas independentes: 13 apontamentos, 12 aceitos e 1 rejeitado com evidência."
+
+  - id: T_SAC59
+    node_type: decision
+    plane: PROD
+    status: done
+    impact: 3
+    confidence: 1.0
+    verified_at: 2026-09-30
+    verified_against: linear-SAC-59-done-pr-2-merged
+    trace: "Linear SAC-59 · PR #2"
+    label: "Spike de mapeamento concluído: produziu o ADR (D_ZOHO_MAPPING)."
+
+  - id: T_SAC60
+    node_type: decision
+    plane: PROD
+    status: done
+    impact: 4
+    confidence: 0.8
+    verified_at: 2026-09-30
+    verified_against: dogfood-39-de-39-blocos-do-md-executados-auth-real-credencial-falsa-mutacao-2-de-2-pegos-commit-1c0a6f2
+    drive_kind: execution
+    trace: "Linear SAC-60"
+    label: "Criar .claude/utils/task-manager/adapters/zoho-projects.md implementando ITaskManager conforme o ADR: auth OAuth com refresh e cache, base URL por DC, CRUD de task/subtask/comentário, status, busca e projetos."
+
+  - id: T_SAC61
+    node_type: decision
+    plane: PROD
+    status: done
+    impact: 4
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: matriz-detector-7-providers-x-13-ids-main-vs-branch-zero-regressao-commit-e4e8d96
+    drive_kind: execution
+    trace: "Linear SAC-61"
+    label: "Registrar zoho-projects em types/detector/factory/interface, .env.example e /meta:setup-integration, sem regressão em Linear, ClickUp, Asana e Jira."
+
+  - id: T_CORELAY
+    node_type: decision
+    plane: PROD
+    status: open
+    impact: 3
+    confidence: 0.8
+    verified_at: 2026-09-30
+    verified_against: sinal-escrito-em-docs-evolution-inbox-2026-09-30-adapter-zoho-projects-provider-relay-pendente-MOAT
+    drive_kind: execution
+    trace: docs/evolution/inbox/2026-09-30-adapter-zoho-projects-provider.md
+    label: "Sinal upstream ao core (/meta:co-relay) pedindo a promoção do adapter. Sem isso, a edição em .claude/utils/task-manager/ vira conflito no próximo /meta:adopt --update. Escrever no inbox do core é repo alheio (MOAT do /meta:drive): o driver prepara o sinal, e o relay é do maestro."
+
+  - id: Q_ZOHO_CREDENTIALS
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 5
+    confidence: 1.0
+    verified_at: 2026-09-30
+    verified_against: env-sem-nenhuma-variavel-ZOHO
+    drive_kind: decision
+    label: "Faltam as credenciais Zoho da GMill: Self Client (client_id/secret, refresh_token), DC e portal_id. É do maestro ou da GMill, e o driver não tem como avançar isto."
+
+  - id: Q_LIVE_VALIDATION
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.8
+    verified_at: 2026-09-30
+    verified_against: adr-pendencias-P1-a-P5
+    drive_kind: research
+    label: "P1–P5 do ADR: validar contra o portal real o id composto, o project no GET /tasks do portal, o root_task_id aninhado, os status por layout e o campo de filtro de tags. Prova os critérios 1 a 3 da SAC-58."
+
+  - id: Q_LGPD_ZOHO
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.6
+    verified_at: 2026-09-30
+    verified_against: levantada-no-chat-e-suspensa-pelo-maestro
+    drive_kind: decision
+    label: "LGPD: (1) se o DC do Zoho for fora do Brasil, há transferência internacional (art. 33); (2) o fluxo GLPI→Zoho pode levar dado de paciente/consumidor à task, o que customer-communication.md proíbe tratar. A pergunta ao core ficou SUSPENSA pelo maestro em 2026-09-30."
+
+  - id: C_HOOK_HUB_FALSE_POSITIVE
+    node_type: claim
+    plane: PROD
+    status: confirmed
+    impact: 2
+    confidence: 1.0
+    verified_at: 2026-09-30
+    verified_against: review-artifact-check-sh-rc0-skip-repo-derivado-hub
+    label: "O hook bash-empty-result-guard avisa PR-SEM-PASSADA-ADVERSARIAL ao abrir PR num repo hub, mas a REGRA 56 (PR aberto carrega RESÍDUO da passada adversarial) isenta hub: rodada no PR #2, deu rc=0 com skip. O hook não consulta o papel do repo. É um sinal para o core."
+
+edges:
+  - from: EV_ZOHO_V3_DOCS
+    to: D_ZOHO_MAPPING
+    edge_type: SUPPORTS
+    label: "Cada decisão do ADR cita a âncora da operação na doc baixada."
+  - from: T_SAC59
+    to: D_ZOHO_MAPPING
+    edge_type: CAUSES
+    label: "O spike produziu o ADR."
+  - from: T_SAC60
+    to: D_ZOHO_MAPPING
+    edge_type: DEPENDS_ON
+    label: "O adapter implementa o que o ADR decidiu."
+  - from: T_SAC61
+    to: T_SAC60
+    edge_type: DEPENDS_ON
+    label: "Registrar um provider que ainda não existe quebra a factory."
+  - from: T_CORELAY
+    to: T_SAC61
+    edge_type: DEPENDS_ON
+    label: "O sinal pede a promoção do adapter já integrado."
+  - from: Q_LIVE_VALIDATION
+    to: Q_ZOHO_CREDENTIALS
+    edge_type: DEPENDS_ON
+    label: "Sem credenciais, não há portal para validar."
+  - from: Q_LIVE_VALIDATION
+    to: T_SAC60
+    edge_type: DEPENDS_ON
+    label: "Valida-se o adapter, que precisa existir."
+  - from: G_SAC58
+    to: T_SAC61
+    edge_type: DEPENDS_ON
+    label: "Critério 4 (sem regressão) e integração."
+  - from: G_SAC58
+    to: T_CORELAY
+    edge_type: DEPENDS_ON
+    label: "Critério 5 (sinal upstream)."
+  - from: G_SAC58
+    to: Q_LIVE_VALIDATION
+    edge_type: DEPENDS_ON
+    label: "Critérios 1 a 3 só se provam no portal real."
+  - from: Q_LGPD_ZOHO
+    to: G_SAC58
+    edge_type: CONSTRAINS
+    label: "A escolha do DC e o conteúdo das tasks têm implicação LGPD. Não bloqueia o código, mas limita o uso em produção."
+  - from: C_HOOK_HUB_FALSE_POSITIVE
+    to: T_CORELAY
+    edge_type: SUPPORTS
+    label: "Vai no mesmo sinal ao core."
