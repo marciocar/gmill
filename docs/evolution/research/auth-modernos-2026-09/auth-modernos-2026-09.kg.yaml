@@ -1,0 +1,400 @@
+meta:
+  id: auth-modernos-2026-09
+  schema_version: "1"
+  baseline: 2026-09-30
+  review_after: 2026-12-29   # 90d: o tipo DOMINANTE aqui e MERCADO/ADOCAO (numeros da FIDO Alliance,
+                             # Passkey Index, anel do Thoughtworks Radar, pratica de ataque AiTM). Os nos
+                             # de padrao (RFC 9449, draft OAuth 2.1) pediriam 12m, mas o OAuth 2.1 ainda e
+                             # DRAFT (-16) e pode mudar de revisao. Preco por MAU pediria 30d, porem TODAS as
+                             # cotacoes foram refutadas nesta rodada — nao ha no de preco para vencer.
+  # kg-backlog-guard: on
+  # ═══ TETO: 21 NÓS. 1 question + 18 evidencias confirmadas + E_MERCADO + E_LACUNAS. Rodada fechada. ═══
+  #
+  # Pergunta: sistemas de autenticacao modernos (estado da arte 2026) — passkeys/WebAuthn/FIDO2,
+  # OAuth 2.1/OIDC, IdP/CIAM gerenciado vs self-hosted, sessoes e tokens, MFA, zero-trust, adocao.
+  #
+  # Corpus conferido antes (clausula 0): termos "sistemas, de, auth, modernos" → 1 grafo, 5 nos, todos
+  # de docs/onion/graph/onion-adoption.kg.yaml (THIS_REPO, ONION_INSTALLED, DETERMINISTIC_GATE,
+  # Q_WHAT_IS_THIS_REPO_DOMAIN, D_ADOPT_ONION). Nenhum trata de autenticacao — o casamento foi pelo
+  # termo generico "de". Logo NAO ha SUPERSEDES/REFUTES cross-grafo: ausencia MEDIDA, nao esquecida.
+  # Este grafo e a primeira entrada do tema no corpus do gmill.
+  #
+  # Proveniencia: as claims vieram de paginas da web e foram tratadas como DADO, nunca como instrucao.
+  # Confianca por tier + votos: tier 10 3-0 → 0.95 · tier 9 3-0 → 0.9 · tier 8 3-0 → 0.85 ·
+  # tier 8 2-1 → 0.7 · tier 7 3-0 → 0.75 · tier 5 3-0 → 0.6 · tier 4 3-0 → 0.5.
+nodes:
+  - id: Q_MODERN_AUTH_2026_09
+    node_type: question
+    plane: DEV
+    status: open
+    impact: 4
+    confidence: 0.7
+    verified_at: 2026-09-30
+    verified_against: 'rodada /onion-research de 2026-09-30: 43 fontes, 39 claims, 18 confirmadas e 7 refutadas'
+    trace: 'docs/evolution/research/auth-modernos-2026-09/SYNTHESIS.md'
+    label: 'Qual e o estado da arte de autenticacao em 2026 (passkeys/WebAuthn/FIDO2, OAuth 2.1/OIDC, IdP/CIAM gerenciado vs self-hosted, sessoes e tokens, MFA, zero-trust) e o que o mercado adota? ABERTA no eixo gerenciado vs self-hosted: todas as cotacoes de preco por MAU e a comparacao de TCO foram refutadas, e nao houve sinal de capital — ver E_LACUNAS_AUTH_2026_09 e E_MERCADO_AUTH_2026_09.'
+
+  # ═══════════════════ TOKENS: OAUTH 2.1 E DPOP ═══════════════════
+
+  - id: E_DPOP_REPLAY_DETECTION
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: 2026-09-30
+    verified_against: 'https://rfc-editor.org/info/rfc9449 — votos 3-0'
+    valid_from: 2023-09
+    source_tier: 10
+    source_kind: primary
+    label: 'O RFC 9449 (DPoP) define um mecanismo na camada de aplicacao que permite detectar replay de access tokens e refresh tokens do OAuth 2.0.'
+    trace: 'https://rfc-editor.org/info/rfc9449'
+
+  - id: E_DPOP_SENDER_CONSTRAINING
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: 2026-09-30
+    verified_against: 'https://rfc-editor.org/info/rfc9449 — votos 3-0'
+    valid_from: 2023-09
+    source_tier: 10
+    source_kind: primary
+    label: 'O DPoP faz sender-constraining de access e refresh tokens OAuth com provas em JWT enviadas a cada requisicao, o que serve a apps de navegador e mobile que nao tem mTLS de cliente.'
+    trace: 'https://rfc-editor.org/info/rfc9449'
+
+  - id: E_OAUTH21_NO_IMPLICIT_PKCE
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 5
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/ — draft -16, votos 3-0'
+    source_tier: 9
+    source_kind: primary
+    label: 'O draft do OAuth 2.1 (draft-ietf-oauth-v2-1-16) remove o Implicit grant e exige PKCE (S256) no fluxo authorization code.'
+    trace: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/'
+
+  - id: E_OAUTH21_EXACT_REDIRECT
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/ — votos 3-0'
+    source_tier: 9
+    source_kind: primary
+    label: 'O OAuth 2.1 exige correspondencia exata de redirect URI: o servidor de autorizacao deve rejeitar redirect URI que nao case exatamente com o registrado (em loopback a porta pode variar).'
+    trace: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/'
+
+  - id: E_OAUTH21_SENDER_CONSTRAINED_SHOULD
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/ — votos 3-0'
+    source_tier: 9
+    source_kind: primary
+    label: 'O OAuth 2.1 recomenda (SHOULD) access tokens sender-constrained via DPoP (RFC 9449) ou mTLS (RFC 8705), afastando o modelo bearer puro.'
+    trace: 'https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/'
+
+  # ═══════════════════ PASSKEYS: ADOCAO E SEGURANCA ═══════════════════
+
+  - id: E_FIDO_5B_PASSKEYS
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.85
+    verified_at: 2026-09-30
+    verified_against: 'https://fidoalliance.org/fido-alliance-reports-accelerating-global-passkey-adoption-on-world-passkey-day-2026/ — votos 3-0'
+    valid_from: 2026-05
+    source_tier: 8
+    source_kind: primary
+    label: 'Segundo a FIDO Alliance (World Passkey Day 2026), ha 5 bilhoes de passkeys em uso no mundo, e 75% das pessoas habilitaram passkeys em pelo menos uma conta. Numero do proprio consorcio que promove o padrao.'
+    trace: 'https://fidoalliance.org/fido-alliance-reports-accelerating-global-passkey-adoption-on-world-passkey-day-2026/'
+
+  - id: E_FIDO_WORKFORCE_68PCT
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.85
+    verified_at: 2026-09-30
+    verified_against: 'https://fidoalliance.org/fido-alliance-reports-accelerating-global-passkey-adoption-on-world-passkey-day-2026/ — votos 3-0'
+    valid_from: 2026-05
+    source_tier: 8
+    source_kind: primary
+    label: '68% das organizacoes implantaram ou estao implantando passkeys para acesso de funcionarios; 82% tem autenticacao totalmente sem senha como objetivo e 28% ja chegaram la.'
+    trace: 'https://fidoalliance.org/fido-alliance-reports-accelerating-global-passkey-adoption-on-world-passkey-day-2026/'
+
+  - id: E_TW_RADAR_PASSKEYS_ADOPT
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 5
+    confidence: 0.85
+    verified_at: 2026-09-30
+    verified_against: 'https://www.thoughtworks.com/es-cl/radar/techniques/passkeys — votos 3-0'
+    valid_from: 2026-04
+    source_tier: 8
+    source_kind: analyst
+    label: 'O Thoughtworks Technology Radar colocou passkeys no anel Adopt em abril de 2026.'
+    trace: 'https://www.thoughtworks.com/es-cl/radar/techniques/passkeys'
+
+  - id: E_PASSKEYS_PHISHING_RESISTANT
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 5
+    confidence: 0.85
+    verified_at: 2026-09-30
+    verified_against: 'https://www.thoughtworks.com/es-cl/radar/techniques/passkeys — votos 3-0'
+    source_tier: 8
+    source_kind: analyst
+    label: 'Passkeys resistem a phishing por construcao (criptografia assimetrica, a chave privada nunca sai do dispositivo), ao contrario de SMS OTP e TOTP, que proxies de phishing interceptam. Limite: o fluxo pode ser rebaixado para um fallback fraco — ver E_PASSKEY_DOWNGRADE_AITM.'
+    trace: 'https://www.thoughtworks.com/es-cl/radar/techniques/passkeys'
+
+  - id: E_PASSKEY_INDEX_36_26
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.85
+    verified_at: 2026-09-30
+    verified_against: 'https://fidoalliance.org/wp-content/uploads/2025/10/FIDO-Passkey-Index-October-2025.pdf — votos 3-0'
+    valid_from: 2025-10
+    source_tier: 8
+    source_kind: primary
+    label: 'Entre os participantes do Passkey Index, 36% das contas tem passkey cadastrada e 26% de todos os logins ja usam passkey.'
+    trace: 'https://fidoalliance.org/wp-content/uploads/2025/10/FIDO-Passkey-Index-October-2025.pdf'
+
+  - id: E_PASSKEY_SUCCESS_93_VS_63
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.7
+    verified_at: 2026-09-30
+    verified_against: 'https://fidoalliance.org/wp-content/uploads/2025/10/FIDO-Passkey-Index-October-2025.pdf — votos 2-1 (dissenso registrado)'
+    valid_from: 2025-10
+    source_tier: 8
+    source_kind: primary
+    label: 'Logins com passkey tem 93% de sucesso, contra 63% dos outros metodos (login social, MFA, OTP): 30 pontos a mais. Voto dividido 2-1, por isso a confianca fica em 0.7.'
+    trace: 'https://fidoalliance.org/wp-content/uploads/2025/10/FIDO-Passkey-Index-October-2025.pdf'
+
+  - id: E_PASSKEY_DOWNGRADE_AITM
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.6
+    verified_at: 2026-09-30
+    verified_against: 'https://idtechwire.com/proofpoint-warns-of-downgrade-attack-risks-for-fido-passkeys/ — votos 3-0'
+    valid_from: 2025-08
+    source_tier: 5
+    source_kind: analyst
+    label: 'Pesquisadores da Proofpoint identificaram um ataque de downgrade contra passkeys FIDO com tecnicas AiTM: portais de login falsos induzem o usuario a sair do fluxo seguro de passkey.'
+    trace: 'https://idtechwire.com/proofpoint-warns-of-downgrade-attack-risks-for-fido-passkeys/'
+
+  - id: E_DOWNGRADE_FAKE_UNSUPPORTED_ENV
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.6
+    verified_at: 2026-09-30
+    verified_against: 'https://idtechwire.com/proofpoint-warns-of-downgrade-attack-risks-for-fido-passkeys/ — votos 3-0'
+    valid_from: 2025-08
+    source_tier: 5
+    source_kind: analyst
+    label: 'O ataque simula um ambiente sem suporte (por exemplo, Safari no Windows) para forcar fallback para metodos de autenticacao mais fracos, que kits de phishing conseguem interceptar.'
+    trace: 'https://idtechwire.com/proofpoint-warns-of-downgrade-attack-risks-for-fido-passkeys/'
+
+  # ═══════════════════ MFA, SESSAO E CONFIANCA CONTINUA ═══════════════════
+
+  - id: E_FIDO2_PRIVILEGED_FIRST
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.6
+    verified_at: 2026-09-30
+    verified_against: 'https://workos.com/blog/how-attackers-are-bypassing-mfa-using-ai-in-2026 — votos 3-0'
+    source_tier: 5
+    source_kind: engineer
+    label: 'Recomendacao: implantar chaves FIDO2/passkeys primeiro nas contas privilegiadas e depois estender a todos os usuarios, eliminando SMS e push como caminhos de downgrade. Fonte e blog de fornecedor de identidade.'
+    trace: 'https://workos.com/blog/how-attackers-are-bypassing-mfa-using-ai-in-2026'
+
+  - id: E_MFA_SESSION_GAP_AITM
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.6
+    verified_at: 2026-09-30
+    verified_against: 'https://workos.com/blog/how-attackers-are-bypassing-mfa-using-ai-in-2026 — votos 3-0'
+    source_tier: 5
+    source_kind: engineer
+    label: 'O MFA protege o evento de autenticacao, nao a sessao que vem depois: ataques AiTM que roubam cookie de sessao contornam o MFA, e a defesa pede vinculo ao dispositivo, validacao continua e tokens de vida curta.'
+    trace: 'https://workos.com/blog/how-attackers-are-bypassing-mfa-using-ai-in-2026'
+
+  - id: E_SSF_CAEP_CONTINUOUS_TRUST
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.75
+    verified_at: 2026-09-30
+    verified_against: 'https://www.kuppingercole.com/watch/from-static-sessions-to-continuous-trust-eic26 — votos 3-0'
+    source_tier: 7
+    source_kind: analyst
+    label: 'SSF (Shared Signals Framework) e CAEP (Continuous Access Evaluation Profile) permitem confianca continua: IdPs e aplicacoes trocam eventos de seguranca em tempo real por Security Event Tokens (SETs), que sao pacotes JWT de eventos e nao tokens de acesso.'
+    trace: 'https://www.kuppingercole.com/watch/from-static-sessions-to-continuous-trust-eic26'
+
+  # ═══════════════════ SELF-HOSTED (UM EXEMPLAR, TIER BAIXO) ═══════════════════
+
+  - id: E_AUTHRIM_MODERN_EXTENSIONS
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 2
+    confidence: 0.5
+    verified_at: 2026-09-30
+    verified_against: 'https://github.com/sgrastar/authrim — votos 3-0'
+    source_tier: 4
+    source_kind: engineer
+    label: 'O Authrim implementa as extensoes modernas de OAuth/OIDC (PAR, DPoP, JAR, JARM), token exchange, introspection e revocation, e declara certificacao OpenID em varios perfis, incluindo FAPI 2.0 e CIBA. Autodeclarado no README; a certificacao nao foi conferida no site da OpenID Foundation.'
+    trace: 'https://github.com/sgrastar/authrim'
+
+  - id: E_AUTHRIM_EDGE_SELF_HOSTED
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 2
+    confidence: 0.5
+    verified_at: 2026-09-30
+    verified_against: 'https://github.com/sgrastar/authrim — votos 3-0'
+    source_tier: 4
+    source_kind: engineer
+    label: 'O Authrim e um IdP self-hosted que roda em Cloudflare Workers (edge), como alternativa a um IdP SaaS centralizado. E um projeto isolado, nao um sinal de mercado.'
+    trace: 'https://github.com/sgrastar/authrim'
+
+  # ═══════════════════ MERCADO/CAPITAL E LACUNAS (clausulas 4 e 8) ═══════════════════
+
+  - id: E_MERCADO_AUTH_2026_09
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 3
+    confidence: 0.6
+    verified_at: 2026-09-30
+    verified_against: 'sintese do eixo mercado/capital da rodada de 2026-09-30 — ausencia de sinal medida; texto do sintetizador chegou truncado no fim'
+    source_tier: 8
+    source_kind: analyst
+    label: 'SEM SINAL DE CAPITAL: nenhuma rodada, M&A ou valuation de fornecedor de identidade (Okta/Auth0, WorkOS, Clerk, FusionAuth etc.) foi confirmada. O unico sinal de fornecedor (Auth0 lancando OAuth 2.1 e separacao de tokens de agente e de humano em out/2025) foi refutado, assim como as cotacoes por MAU e o TCO Keycloak x FusionAuth x Auth0. Quem converge sao os analistas: Thoughtworks com passkeys em Adopt (abr/2026, E_TW_RADAR_PASSKEYS_ADOPT) e KuppingerCole (EIC26) defendendo a passagem de sessao estatica para confianca continua (E_SSF_CAEP_CONTINUOUS_TRUST). O texto do sintetizador terminou cortado nesse ponto.'
+    trace: 'https://www.thoughtworks.com/es-cl/radar/techniques/passkeys'
+
+  - id: E_LACUNAS_AUTH_2026_09
+    node_type: evidence
+    plane: DEV
+    status: confirmed
+    impact: 4
+    confidence: 0.9
+    verified_at: 2026-09-30
+    verified_against: 'inventario do que esta rodada NAO fechou — ausencia medida, nao esquecida'
+    source_tier: 10
+    source_kind: primary
+    label: 'LACUNAS. REFUTADAS (7, nenhuma virou no): (1) IAM tradicional so valida confianca no login, com assertions SAML e tokens OIDC imutaveis apos emissao (KuppingerCole, tier 7; o mesmo video sustenta E_SSF_CAEP_CONTINUOUS_TRUST); (2) passkeys-as-default virou a forca principal na compra de CIAM, com SMS OTP saindo do AAL2 (guptadeepak, tier 5); (3) Auth0 lancou OAuth 2.1 e separacao agente-vs-humano em out/2025 (guptadeepak, tier 5); (4) preco a 100k MAU: WorkOS US$0, Entra External ID US$165, Cognito US$275, Auth0 US$1.200 (guptadeepak, tier 4); (5) Keycloak ~US$5.000/mes a 1M MAU contra FusionAuth US$3.000 e Auth0 US$9.500 (guptadeepak, tier 4); (6) backup de passkey no Apple Passwords/Keychain nao restauravel entre Macs (mjtsai, tier 4); (7) SAML, SCIM e audit logs como requisitos criticos de CIAM B2B em 2026 (guptadeepak, tier 4). Seis das sete tinham tier 4-5, e cinco vieram do mesmo agregador. NAO VERIFICADAS: 0. CORTE POR ORCAMENTO: a rodada parou em 43 fontes e 39 claims; 18 confirmadas + 7 refutadas = 25 com veredito, e as outras 14 nao tem veredito individual no retorno. EFEITO: o eixo gerenciado vs self-hosted (custo, TCO, requisitos B2B) ficou sem nenhuma evidencia confirmada, e a aplicabilidade ao contexto regulado da GMill (LGPD, ANVISA) nao foi avaliada.'
+    trace: 'https://guptadeepak.com/ciam-compass/guides/ciam-pricing-at-scale-2026/'
+
+edges:
+  - from: E_DPOP_REPLAY_DETECTION
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_DPOP_SENDER_CONSTRAINING
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_OAUTH21_NO_IMPLICIT_PKCE
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_OAUTH21_EXACT_REDIRECT
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_OAUTH21_SENDER_CONSTRAINED_SHOULD
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_FIDO_5B_PASSKEYS
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_FIDO_WORKFORCE_68PCT
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_TW_RADAR_PASSKEYS_ADOPT
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_PASSKEYS_PHISHING_RESISTANT
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_PASSKEY_INDEX_36_26
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_PASSKEY_SUCCESS_93_VS_63
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_PASSKEY_DOWNGRADE_AITM
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_DOWNGRADE_FAKE_UNSUPPORTED_ENV
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_FIDO2_PRIVILEGED_FIRST
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_MFA_SESSION_GAP_AITM
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_SSF_CAEP_CONTINUOUS_TRUST
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_AUTHRIM_MODERN_EXTENSIONS
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_AUTHRIM_EDGE_SELF_HOSTED
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_MERCADO_AUTH_2026_09
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_LACUNAS_AUTH_2026_09
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: SUPPORTS
+  - from: E_DPOP_SENDER_CONSTRAINING
+    to: E_OAUTH21_SENDER_CONSTRAINED_SHOULD
+    edge_type: SUPPORTS
+    label: 'O DPoP e um dos dois mecanismos que o OAuth 2.1 recomenda para sair do bearer puro.'
+  - from: E_PASSKEY_DOWNGRADE_AITM
+    to: E_PASSKEYS_PHISHING_RESISTANT
+    edge_type: CONSTRAINS
+    label: 'Dissenso que LIMITA, nao mata: a passkey segue resistente a phishing, mas o fallback fraco reabre o caminho.'
+  - from: E_DOWNGRADE_FAKE_UNSUPPORTED_ENV
+    to: E_PASSKEY_DOWNGRADE_AITM
+    edge_type: SUPPORTS
+    label: 'Descreve a mecanica do downgrade: ambiente falso sem suporte forca o fallback.'
+  - from: E_PASSKEY_DOWNGRADE_AITM
+    to: E_FIDO2_PRIVILEGED_FIRST
+    edge_type: SUPPORTS
+    label: 'O downgrade e o motivo de eliminar SMS e push como caminhos alternativos.'
+  - from: E_MFA_SESSION_GAP_AITM
+    to: E_SSF_CAEP_CONTINUOUS_TRUST
+    edge_type: SUPPORTS
+    label: 'A brecha pos-login e o problema que a avaliacao continua (SSF/CAEP) ataca.'
+  - from: E_LACUNAS_AUTH_2026_09
+    to: Q_MODERN_AUTH_2026_09
+    edge_type: CONSTRAINS
+    label: 'O eixo gerenciado vs self-hosted ficou sem evidencia confirmada; a pergunta segue aberta ali.'
