@@ -370,11 +370,10 @@ Campos principais do **Create Task** [1]:
 
 ## 🔗 Integração com o Sistema Onion
 
-- **Ainda não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
-  asana | linear | none` (ver [task-manager-abstraction](../concepts/task-manager-abstraction.md)).
-  Operar tasks do Zoho via `/product:task` exigiria um **adapter novo** em
-  `.claude/utils/task-manager/adapters/`, caminho de `/meta:create-abstraction` + sinal upstream ao core.
-  **Em andamento:** SAC-58. O mapeamento para `ITaskManager` (id composto `<project_id>.<task_id>`,
+- **É provider do SDAAL de task manager** (local ao hub, desde a SAC-58): `TASK_MANAGER_PROVIDER=zoho-projects`,
+  adapter em `.claude/utils/task-manager/adapters/zoho-projects.md` (só REST; sem MCP). A promoção ao
+  core segue por sinal upstream. **Estado:** conferido contra a doc e com os modos de falha de auth
+  medidos. O caminho feliz ainda não rodou contra um portal real (faltam as credenciais da GMill). O mapeamento para `ITaskManager` (id composto `<project_id>.<task_id>`,
   status, prioridade, cobertura dos métodos) está no
   [ADR de mapeamento](../../technical-context/decisions/adr-zoho-projects-task-mapping.md).
 - **Segredos:** `ZOHO_*` no `.env`, carregado com `set -a; source .env; set +a`. Doutrina em

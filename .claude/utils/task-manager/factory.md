@@ -9,7 +9,7 @@ Instanciar o adapter correto para o provider e transporte configurados, abstrain
 
 **Regra de transporte (invariante):**
 - `TASK_MANAGER_TRANSPORT=api` (default) → REST API direta; sempre disponível.
-- `TASK_MANAGER_TRANSPORT=mcp` → MCP server do provider; ativado apenas quando o provider suporta MCP (`clickup`, `linear`). Se não suportado, cai automaticamente para `api`.
+- `TASK_MANAGER_TRANSPORT=mcp` → MCP server do provider; ativado apenas quando o provider suporta MCP (`clickup`, `linear`). Se não suportado, cai automaticamente para `api` (`zoho-projects` é sempre `api`: não há MCP).
 
 A decisão final de transporte é resolvida pelo `detectProvider()` (ver `detector.md`) e exposta em `ProviderConfig.transport`. A factory lê esse campo — nunca relê `TASK_MANAGER_TRANSPORT` diretamente.
 
@@ -99,6 +99,20 @@ function getTaskManager(options?: FactoryOptions): ITaskManager {
         transport: config.transport,          // <- ciente do transporte
         apiKey: process.env.LINEAR_API_KEY!,
         teamId: process.env.LINEAR_TEAM_ID
+      });
+
+    case 'zoho-projects':
+      // transport sempre 'api' (REST V3; sem MCP). Ver adapters/zoho-projects.md
+      // e o ADR docs/technical-context/decisions/adr-zoho-projects-task-mapping.md
+      return new ZohoProjectsAdapter({
+        clientId: process.env.ZOHO_CLIENT_ID!,
+        clientSecret: process.env.ZOHO_CLIENT_SECRET!,
+        refreshToken: process.env.ZOHO_REFRESH_TOKEN!,
+        accountsUrl: process.env.ZOHO_ACCOUNTS_URL!,
+        portalId: process.env.ZOHO_PORTAL_ID!,
+        defaultProjectId: process.env.ZOHO_DEFAULT_PROJECT_ID,
+        defaultTasklistId: process.env.ZOHO_DEFAULT_TASKLIST_ID,
+        webUrl: process.env.ZOHO_WEB_URL
       });
 
     case 'none':

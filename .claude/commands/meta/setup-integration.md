@@ -6,7 +6,7 @@ description: |
 allowed-tools: Read Bash(test -f *) Bash(grep *) Bash(git ls-files*)
 parameters:
   - name: integration
-    description: Nome da integração (task-manager, clickup, asana, linear, gamma, postgres)
+    description: Nome da integração (task-manager, clickup, asana, linear, zoho-projects, gamma, postgres)
     required: false
 category: meta
 tags:
@@ -25,7 +25,7 @@ related_agents:
 
 # ⚙️ Configuração de Integrações
 
-Você é um assistente de configuração do Sistema Onion. Sua missão é guiar o usuário na configuração segura de integrações externas, especialmente **Task Managers** (ClickUp, Asana, Linear).
+Você é um assistente de configuração do Sistema Onion. Sua missão é guiar o usuário na configuração segura de integrações externas, especialmente **Task Managers** (ClickUp, Asana, Linear, Zoho Projects).
 
 ## 🎯 Objetivo
 
@@ -39,7 +39,7 @@ SE `{{integration}}` foi fornecido:
 - Use diretamente
 SENÃO:
 - Pergunte qual integração configurar:
-  - **task-manager** - Configurar gerenciador de tarefas (ClickUp, Asana, Linear) - **RECOMENDADO PRIMEIRO**
+  - **task-manager** - Configurar gerenciador de tarefas (ClickUp, Asana, Linear, Zoho Projects) - **RECOMENDADO PRIMEIRO**
   - **clickup** - ClickUp (API-first; MCP opcional) para gestão de tarefas
   - **asana** - Asana (API-first; MCP opcional) para gestão de tarefas
   - **linear** - Linear (API-first) para gestão de tarefas
@@ -77,7 +77,7 @@ Read .env
 # ═══════════════════════════════════════
 # GERENCIADOR DE TAREFAS (escolha um)
 # ═══════════════════════════════════════
-TASK_MANAGER_PROVIDER=clickup  # clickup | asana | linear | none
+TASK_MANAGER_PROVIDER=clickup  # clickup | asana | linear | zoho-projects | none
 ```
 
 **2. Configurar ClickUp (se escolhido):**
@@ -117,7 +117,27 @@ LINEAR_TEAM_ID=abc123  # Opcional
 - **API Key**: Settings > API no Linear
 - **Team ID**: URL do time ou via API
 
-**5. Modo Offline (sem gerenciador):**
+**5. Configurar Zoho Projects (alternativa):**
+```env
+TASK_MANAGER_PROVIDER=zoho-projects
+ZOHO_CLIENT_ID=1000.xxxxx
+ZOHO_CLIENT_SECRET=xxxxx
+ZOHO_REFRESH_TOKEN=1000.xxxxx.xxxxx
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.com   # DC do portal
+ZOHO_PORTAL_ID=123456789
+ZOHO_DEFAULT_PROJECT_ID=                      # Opcional
+```
+
+**Como obter:**
+- **Self Client**: <https://api-console.zoho.com> → Self Client → grant code com os escopos de
+  `adapters/zoho-projects.md`. **Troque em ~3 min** por access + refresh token
+  (`POST {ZOHO_ACCOUNTS_URL}/oauth/v2/token`). Guarde só o refresh token.
+- **DC**: o `api_domain` da troca confirma a região; `ZOHO_ACCOUNTS_URL` tem que ser do mesmo DC.
+- **Portal ID**: `GET /api/v3/portals`.
+- ⚠️ Sem MCP: o transporte é sempre `api`.
+- ⚠️ **LGPD:** um DC fora do Brasil implica transferência internacional dos dados das tasks.
+
+**6. Modo Offline (sem gerenciador):**
 ```env
 TASK_MANAGER_PROVIDER=none
 # Sistema funcionará em modo local sem sincronização

@@ -2,6 +2,7 @@
 title: "ADR — Mapeamento Zoho Projects V3 → ITaskManager (adapter zoho-projects)"
 date: 2026-09-30
 updated: 2026-09-30
+implemented_by: .claude/utils/task-manager/adapters/zoho-projects.md (SAC-60/61)
 type: adr
 status: aceito — ratificado pelo maestro em 2026-09-30 (após 2 passadas de revisão independente)
 decision-scope: engenharia / task-manager SDAAL / adapter zoho-projects
@@ -210,6 +211,7 @@ de prioridade, mas isso depende da configuração do portal e sai do escopo.
 | P3 | Confirmar se o `root_task_id` de subtasks aninhadas afeta o id composto (é o mesmo `project_id`) | Idem |
 | P4 | Confirmar se os status valem por layout de projeto e, se valerem, trocar `global-statuses` pelo detalhe do layout (`/settings/layouts/{id}`) | Idem |
 | P5 | Nome do campo de filtro para `tags` (API de campos do módulo) | Idem |
+| P6 | Se o Markdown da descrição/comentário renderiza no Zoho, e o formato do link web da task (a API não devolve link; o adapter o monta `[INFERIDO]`) | Idem |
 
 ## Histórico de revisão
 
