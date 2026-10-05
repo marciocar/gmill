@@ -2,3 +2,7 @@
 .env
 .env.*
 !.env.example
+
+# Worklogs de sessão (.claude/sessions/) — default do Onion: gitignore (estado individual/efêmero).
+# Política: docs/knowledge-base/frameworks/gitflow-patterns.md §Contrato de Sessão → Versionamento de sessões.
+.claude/sessions/

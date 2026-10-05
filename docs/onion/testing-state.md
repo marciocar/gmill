@@ -12,13 +12,13 @@
 
 | Dimensão | Nº | Produtor |
 |---|---:|---|
-| Famílias na bancada | **185** | `bash .claude/validation/harness-inventory.sh --env` |
-| Sítios de asserção (estáticos) | **1179** | `bash .claude/validation/harness-inventory.sh --env` |
-| Regras do lint | **87** | `bash .claude/validation/rules-registry.sh --counts` |
-| — HARD | **77** | `bash .claude/validation/rules-registry.sh --counts` |
-| Pares de modo consumido | **49** | `bash .claude/validation/consumed-mode-check.sh .` |
+| Famílias na bancada | **199** | `bash .claude/validation/harness-inventory.sh --env` |
+| Sítios de asserção (estáticos) | **1317** | `bash .claude/validation/harness-inventory.sh --env` |
+| Regras do lint | **91** | `bash .claude/validation/rules-registry.sh --counts` |
+| — HARD | **80** | `bash .claude/validation/rules-registry.sh --counts` |
+| Pares de modo consumido | **53** | `bash .claude/validation/consumed-mode-check.sh .` |
 | — sem teste | **0** | `bash .claude/validation/consumed-mode-check.sh .` |
-| Baselines de catraca | **10** | `git ls-files '.claude/validation/*-baseline.txt'` |
+| Baselines de catraca | **11** | `git ls-files '.claude/validation/*-baseline.txt'` |
 
 Detalhe completo: [`testing-inventory.md`](testing-inventory.md) (SSOT gerada, catracada).
 

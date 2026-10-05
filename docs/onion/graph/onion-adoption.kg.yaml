@@ -48,10 +48,10 @@ nodes:
     status: confirmed
     impact: 4
     confidence: 1.0
-    verified_at: 2026-09-23
-    verified_against: stamp-claude-onion-version-relido-apos-o-update
+    verified_at: 2026-10-05
+    verified_against: stamp-claude-onion-version-relido-e-lint-executado-em-2026-10-05
     trace: .claude/.onion-version
-    label: "Framework instalado: pin `cff9214c3b9a`, modo `greenfield`, papel `hub`, branch de integração `main`. ATUALIZADO de `be2913366c5c` por /meta:adopt --update em 2026-09-23: 116 commits do core (51 na superfície que viaja), 70 arquivos, merge de `onion/vendor` LIMPO (rc=0) e gate re-provado por execução. Histórico: adotado em `9711a7dc89d0` e atualizado para `be2913366c5c` em 2026-09-16. O merge é o mecanismo: customização local vira conflito git real, resolvível, em vez de sobrescrita silenciosa."
+    label: "Framework instalado: pin `547e2e3edf3b` (core de 2026-09-30), modo `greenfield`, papel `hub`, branch de integração `main`. ATUALIZADO de `cff9214c3b9a` em 2026-09-30 na branch `chore/onion-update-547e2e3edf3b` (Zoho Projects provider, REGRA 93 (KB de terceiro declara a QUE VERSÃO se aplica)). A entrega chegou com 1 HARD que o relatório não viu — REGRA 8 (Inventário canônico sincronizado com o filesystem), inventário 109 × 111 comandos — curada em 2026-10-05 e sinalizada ao core. Histórico: adotado em `9711a7dc89d0`; `be2913366c5c` (2026-09-16); `cff9214c3b9a` (2026-09-23, merge de `onion/vendor` LIMPO, gate re-provado). O merge é o mecanismo: customização local vira conflito git real, resolvível, em vez de sobrescrita silenciosa."
 
   - id: DETERMINISTIC_GATE
     layer: domain

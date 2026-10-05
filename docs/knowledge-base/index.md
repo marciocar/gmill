@@ -1,6 +1,6 @@
 # 📚 Índice - Knowledge Bases
 
-> **Última atualização**: 2026-09-30 | **Gerado por**: `/docs:build-index`
+> **Última atualização**: 2026-07-19 | **Gerado por**: `/docs:build-index`
 
 Índice das **Knowledge Bases** do Sistema Onion — conhecimento estruturado para consumo por IA e referência técnica.
 
@@ -8,8 +8,8 @@
 
 ## 📊 Estatísticas
 
-- **78 documentos de conteúdo** de knowledge base (exceto `index.md` e READMEs de (sub)categoria)
-- **42** em `concepts/` · **9** em `frameworks/` · **5** em `tools/` · **5** em `platforms/` · **4** em `patterns/` · **1** em `architectures/` · **2** em `meta/` · **6** em `agentic-patterns/` (+ 4 READMEs de (sub)categoria) · **4** em `education/` (+ 1 README de categoria)
+- **75 documentos de conteúdo** de knowledge base (exceto `index.md` e READMEs de (sub)categoria)
+- **42** em `concepts/` · **9** em `frameworks/` · **5** em `tools/` · **3** em `platforms/` · **3** em `patterns/` · **1** em `architectures/` · **2** em `meta/` · **6** em `agentic-patterns/` (+ 4 READMEs de (sub)categoria) · **4** em `education/` (+ 1 README de categoria)
 
 ---
 
@@ -20,8 +20,8 @@ docs/knowledge-base/
 ├── concepts/            # 42 — Conceitos fundamentais
 ├── frameworks/          # 9  — Frameworks e metodologias
 ├── tools/               # 5  — Ferramentas e recursos
-├── platforms/           # 5  — Plataformas e tecnologias
-├── patterns/            # 4  — Padrões de implementação (SDAAL, apresentações, policy-as-data, GLPI→Zoho)
+├── platforms/           # 3  — Plataformas e tecnologias
+├── patterns/            # 3  — Padrões de implementação (SDAAL, apresentações, policy-as-data)
 ├── architectures/       # 1  — C4 + ADR patterns
 ├── meta/                # 2  — Padrões de criação de comandos + identidade/produto
 ├── education/           # 4  — Vertical educacional (fonte≠derivação: theories/ + applications/) + 1 README
@@ -111,15 +111,12 @@ docs/knowledge-base/
 
 - [Gamma.App API](platforms/gamma-app-api.md) — Generations API: especificação, padrões de integração e exemplos (extraído do agente `@gamma-api-specialist`)
 - [Git Ledger as Working Dir](platforms/git-ledger-as-working-dir.md) — ledger git como additional working directory (prova da Fase 0 da federation)
-- [GLPI API](platforms/glpi-api.md) — REST API do GLPI (chamados/ITSM): autenticação, sessão, endpoints de ticket
 - [Runflow](platforms/runflow.md) — SDK e plataforma de agentes/workflows
-- [Zoho Projects API](platforms/zoho-projects-api.md) — API V3: OAuth (Self Client), multi-DC, escopos, endpoints de tarefa, filtros
 
 ---
 
 ## 🧩 Patterns (3)
 
-- [GLPI → Zoho Projects](patterns/glpi-zoho-ticket-to-task.md) — fluxo chamado vira tarefa de projeto: gatilho, middleware, mapeamento, volta
 - [Literate Policy-as-Data](patterns/literate-policy-as-data.md) — config de três leitores: parser lê dados, humano lê história, IA lê ordens (batizadora: members.yaml)
 - [Presentation Orchestration](patterns/presentation-orchestration.md) — contratos de delegação, templates e casos de uso (extraído do agente `@presentation-orchestrator`)
 - [SDAAL Examples](patterns/sdaal-examples.md) — exemplos de implementação do padrão SDAAL

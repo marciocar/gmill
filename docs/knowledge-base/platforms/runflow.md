@@ -3,7 +3,8 @@ title: Runflow
 category: platforms
 verified_at: 2026-07-23
 source: docs.runflow.ai
-version: "@runflow-ai/sdk 1.6.2"
+# `version:` REMOVIDO em 2026-09-30: significava a versão do ALVO (não da KB), que é exatamente a
+# ambiguidade que `applies_to:` existe para desfazer. Manter os dois gravaria a ambiguidade em dobro.
 created: 2025-11-18T21:19:48Z
 updated: 2026-07-23
 sources:
@@ -19,6 +20,7 @@ sources:
     url: https://www.npmjs.com/package/@runflow-ai/sdk
     consulted_at: 2026-07-23
     description: Pacote npm oficial
+applies_to: "@runflow-ai/sdk 1.6.2 — ⚠️ DRIFT INTERNO: o corpo ainda cita SDK 1.3 em dois lugares; não resolvido, declarado. O campo `version:` desta KB já significava a versão do ALVO, que é a ambiguidade que o `applies_to` desfaz"
 ---
 
 # Runflow
