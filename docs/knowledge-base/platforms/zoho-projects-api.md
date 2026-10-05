@@ -1,6 +1,16 @@
+---
+versao: 1.1.0
+data: 2026-09-30
+categoria: platforms
+applies_to: "Zoho Projects API V3 (V2 em maintenance mode desde 2026-01-01, EOL 2026-12-31 — ainda NO AR nesta data)"
+verified_at: 2026-09-30
+verified_against: "absorvida de um adotante hub em 2026-09-30, com scrub. A data do EOL da V2 foi corrigida DUAS VEZES no mesmo dia, e o registro fica porque a lição é a classe: a KB de origem dizia 2025-12-31; uma 1a busca me deu 2026-06-30 e eu GRAVEI isso; a leitura da fonte (help.zoho.com, topico Update on V2 API End-of-Life Timeline) devolveu 31st December, 2026 verbatim, com 2025-12-31 sendo apenas o inicio do maintenance mode. Resultado: a V2 AINDA ESTA NO AR em 2026-09-30, o oposto do que a 2a versao desta linha afirmava. Busca que RESUME nao substitui fonte que DECLARA. Os endpoints e limites NAO foram chamados contra instancia real."
+---
+
 # Zoho Projects API — Knowledge Base
 
-> **Versão**: 1.2.0 | **Última atualização**: 2026-09-30 | **Categoria**: Platforms
+
+> **Categoria**: Platforms
 > Referência técnica da **Zoho Projects REST API V3**: autenticação OAuth 2.0 (Self Client e
 > fluxo web), geração/renovação de tokens, data centers, escopos, paginação, rate limit e erros.
 > Tudo com fonte na documentação oficial da Zoho; o que extrapola a fonte está `[INFERÊNCIA]`.
@@ -11,11 +21,11 @@
 
 | Campo | Valor |
 |-------|-------|
-| **Versão** | 1.2.0 |
+| **Versão** | 1.1.0 |
 | **Data de Criação** | 2026-09-30 |
-| **Última Atualização** | 2026-09-30 (v1.2: endpoints completos de tarefa/comentário/status/projeto, filtro de subtask, escopo `custom_fields.READ`; v1.1: endpoints de tarefa + webhooks/automação) |
+| **Última Atualização** | 2026-09-30 (v1.1: endpoints de tarefa + webhooks/automação) |
 | **Categoria** | platforms |
-| **Versão da API** | V3 (`/api/v3/`) — a vigente desde 2026-01-01; alguns módulos (users, phases, issues) já estão em `/api/v3.1/` |
+| **Versão da API** | V3 (`/api/v3/`) — a única viva desde 2026-01-01 |
 | **Fontes Principais** | [1] <https://projects.zoho.com/api-docs> (V3, oficial) · [2] <https://www.zoho.com/accounts/protocol/oauth/self-client/overview.html> · [3] <https://www.zoho.com/accounts/protocol/oauth/self-client/authorization-code-flow.html> · [4] <https://www.zoho.com/accounts/protocol/oauth/web-apps/authorization.html> · [5] <https://www.zoho.com/accounts/protocol/oauth/multi-dc.html> · [6] <https://www.zoho.com/developer/oauth/token-limits.html> · [7] <https://www.zoho.com/projects/help/rest-api/zohoprojectsapi.html> (legado) · [8] <https://ascentbusiness.co.uk/zoho-projects-api-deadline-migrate-to-v3-by-31-december-2025/> · [9] <https://www.zoho.com/projects/taskautomation.html> · [10] <https://www.zoho.com/projects/zoho-flow-integrations.html> |
 
 ---
@@ -212,6 +222,112 @@ seguem o mesmo servidor de contas. Para o Zoho Projects especificamente, é `[IN
 
 ---
 
+## ✅ O caminho que FUNCIONOU, medido com credencial real (2026-09-30)
+
+⚠️ **Esta seção corrige o Quick Start acima, que ensina o caminho mais difícil como se fosse o único.**
+O Self client aceita **`client_credentials`**, e esse fluxo **dispensa o grant code** — logo dispensa a
+corrida contra a expiração dele, que é de **~3 minutos** (medido no `expiry_time` do `self_client.json`,
+não os 10 que a tela sugere). Duas tentativas pelo caminho do código falharam antes de alguém notar que
+ele não era necessário: `invalid_client` (o `client_id` copiado sem o prefixo `1000.`) e `invalid_code`
+(expirado 2min45 depois de gerado).
+
+```bash
+# nenhum grant code, nenhum refresh_token, nenhum redirect
+curl -s -X POST 'https://accounts.zoho.com/oauth/v2/token' \
+  -d grant_type=client_credentials \
+  -d "client_id=${ZOHO_CLIENT_ID}" \
+  -d "client_secret=${ZOHO_CLIENT_SECRET}" \
+  -d "scope=ZohoProjects.portals.READ,ZohoProjects.projects.READ,ZohoProjects.tasks.ALL"
+# → {"access_token":"1000.…","scope":"…","api_domain":"https://www.zohoapis.com",
+#    "token_type":"Bearer","expires_in":3600}
+```
+
+| o que se mediu | resultado |
+|---|---|
+| precisa de `grant code`? | **não** |
+| vem `refresh_token`? | **não vem, e não faz falta**: o token dura 3600 s e se pede de novo com o mesmo par id+secret |
+| `soid` é obrigatório? | **não** — funcionou com e sem |
+| o token chama a API de verdade? | **sim, HTTP 200** em `/api/v3/portals` **e** `/restapi/portals/`, nos **dois** hosts |
+
+**Um refresh_token a menos é um segredo a menos para guardar e rotacionar** — para um job de servidor
+que é dono dos próprios dados, `client_credentials` é o caminho mais simples E o mais seguro.
+
+### ⚠️ O `login_id` do envelope V2 é o USUÁRIO, não um portal id
+
+Corrigido em 2026-09-30 **por medição**, contra o que esta seção afirmava antes. As duas versões usam
+o **mesmo** id de portal no caminho:
+
+```
+V3  GET /api/v3/portals                       → [ { "id": <PORTAL>, "owner": { "id": <USUARIO> } } ]
+V2  GET /restapi/portals/                     → { "login_id": <USUARIO>, "portals": [ { "id": <PORTAL> } ] }
+V2  GET /restapi/portal/<PORTAL>/projects/    → 200
+V2  GET /restapi/portal/<USUARIO>/projects/   → 404  6504 Domain Not Available
+```
+
+`login_id` está **no topo** do envelope, ao lado de `portals[]`, e bate com `owner.id` da V3 — é o dono,
+não uma variante de portal id. O erro de trocá-los **não** parece de permissão: é `6504 Domain Not
+Available`, um 404. A lição de classe: **nome de campo é declaração**; o que ele é só a chamada diz. E o
+teste de fumaça de qualquer
+integração nova é pedir o portal e conferir de qual campo veio.
+
+### A forma da resposta MUDA entre as versões, e isso é decisão de parsing
+
+```
+V3  GET /api/v3/portals    → [ {"owner":{…},"id":…}, … ]          ← ARRAY no topo
+V2  GET /restapi/portals/  → { "login_id":"…","portals":[ … ] }   ← OBJETO com envelope
+```
+
+Um adapter que assume envelope quebra na V3; um que assume array quebra na V2 — e a V2 **ainda está no
+ar** até 2026-12-31. O mesmo vale para o erro: V3 traz `status_code`/`title`/`instance`, V2 traz `code`
+numérico + `message`.
+
+## 🔬 Medido por sonda sem credencial (2026-09-30)
+
+Três fatos que **nenhuma busca entregou** e um `curl` de doze segundos resolveu. Vale como método: a
+sonda sem credencial custa quase nada e derruba suposição — foi pedido do maestro, *"pequenos testes
+para não perder tempo com suposições"*.
+
+| pergunta | medição | consequência |
+|---|---|---|
+| `projects.zoho.com` e `projectsapi.zoho.com` são a mesma coisa? | **sim**, para estes paths: os dois respondem `/api/v3/portals` **e** `/restapi/portals/` com o mesmo erro de auth | a "divergência de dois hosts na doc" deixa de ser incerteza de desenho; escolha um e siga |
+| a V2 já saiu do ar? | **não**: `/restapi/` devolve **401**, não 404 nem 410 | confirma o EOL de 2026-12-31 **por comportamento**, não por anúncio — e é a evidência que vale |
+| o erro tem a mesma forma nas duas versões? | **não** | é decisão de adapter, e a mais fácil de esquecer |
+
+```
+V3  GET /api/v3/portals    → 401 {"error":{"status_code":"401","instance":"/api/v3/portals","title":"INVALID_TICKET",…}}
+V2  GET /restapi/portals/  → 401 {"error":{"code":6890,"message":"Invalid Ticket"}}
+```
+
+O tratamento de erro do adapter precisa das **duas** formas: a V3 traz `status_code`/`title`/`instance`
+(string no `status_code`, não inteiro), a V2 traz `code` numérico + `message`. Um adapter que só lê
+`error.code` fica cego na V3, e um que só lê `error.title` fica cego na V2 — que **ainda está no ar**.
+
+**Fronteira declarada:** a sonda foi feita **sem credencial**, logo ela prova roteamento, versão viva e
+forma de erro. Ela **não** prova cobertura de campo, paginação, rate limit nem o mapeamento de
+`updateStatus`/`custom_status` — isso exige token e fica aberto.
+
+## ⚠️ "O console está me pedindo Authorized Redirect URIs"
+
+**Então você está no tipo errado de client** — e este é o tropeço mais comum de quem começa, medido em
+2026-09-30. O **Self Client não tem esse campo**: ele existe exatamente para o caso sem navegador e sem
+usuário autorizando. Se o campo apareceu, volte e crie como *Self Client*; saem só Client ID + Secret,
+e o código você gera na própria console.
+
+Se ainda assim você **quiser** o fluxo web (Server-based Application), os valores são:
+
+| onde roda | o que registrar |
+|---|---|
+| máquina local / sessão de agente | `http://localhost:8080/callback` — o Zoho aceita `http://` para localhost |
+| servidor próprio | `https://<seu-domínio>/oauth/callback` — HTTPS real |
+
+Três coisas que economizam uma tarde:
+
+- **O match é EXATO**: barra final, porta, `http` × `https`. Qualquer diferença devolve
+  `invalid_redirect_uri`, e a mensagem **não diz qual parte divergiu**.
+- **Cadastre as duas URIs no MESMO client** (o console aceita várias) em vez de manter dois clients.
+- **O redirect só serve para a troca inicial**: com o `refresh_token` em mão, nada mais passa por ele.
+  É por isso que o Self Client resolve o caso de back-end sem esse campo sequer existir.
+
 ## 🔑 Escopos OAuth
 
 Formato: `ZohoProjects.<módulo>.<OPERAÇÃO>`, com operação em `READ | CREATE | UPDATE | DELETE | ALL`. Os
@@ -229,7 +345,7 @@ as operações explícitas.
 | Integração | Escopos |
 |---|---|
 | Leitura/BI | `ZohoProjects.portals.READ,ZohoProjects.projects.READ,ZohoProjects.tasks.READ,ZohoProjects.timesheets.READ,ZohoProjects.users.READ` |
-| Sync bidirecional de tasks | acima + `ZohoProjects.tasks.ALL,ZohoProjects.tasklists.READ,ZohoProjects.milestones.READ,ZohoProjects.custom_fields.READ` (o último resolve `status.id` via `global-statuses`) |
+| Sync bidirecional de tasks | acima + `ZohoProjects.tasks.ALL,ZohoProjects.tasklists.READ,ZohoProjects.milestones.READ` |
 
 > Token com escopo de Zoho Projects **não** funciona no Zoho BugTracker, e o contrário também vale [7].
 
@@ -295,21 +411,6 @@ Note: token expirado volta como **400, não 401**. Um cliente que só renova em 
 | Atualizar tarefa | `PATCH /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}` | `tasks.UPDATE` |
 | Comentar na tarefa | `POST /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}/comments` (`{"comment": "..."}`) | `tasks.CREATE` |
 | Listar tasklists | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasklists` | `tasklists.READ` |
-| Detalhe da tarefa | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}` | `tasks.READ` |
-| Excluir tarefa | `DELETE /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}` | `tasks.DELETE` |
-| Listar tarefas do projeto | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasks` (`page`, `per_page` ≤ 200, `filter`, `sort_by`) | `tasks.READ` |
-| Listar tarefas do portal | `GET /api/v3/portal/{portal_id}/tasks` (mesmos parâmetros; o exemplo de resposta **não** traz o projeto) | `tasks.READ` |
-| Listar comentários | `GET /api/v3/portal/{portal_id}/projects/{project_id}/tasks/{task_id}/comments` | `tasks.READ` |
-| Detalhe do projeto | `GET /api/v3/portal/{portal_id}/projects/{project_id}` | `projects.READ` |
-| Status globais | `GET /api/v3/portal/{portal_id}/settings/global-statuses?module=tasks` (filtro `status_names`) | `custom_fields.READ` |
-
-> ⚠️ **Não existe rota de tarefa só pelo portal** (`/portal/{id}/tasks/{task_id}`): toda operação
-> numa tarefa exige o `project_id` [1].
-
-**Filtros de tarefa** (parâmetro `filter`, só no módulo Tasks) [1]:
-- Subtasks de um pai: `{"criteria":[{"field_name":"parent_task","criteria_condition":"is","value":["<task_id>"]}],"pattern":"1"}`
-- Só subtasks (ou só as de topo, com `false`): `field_name: "has_parents"`, `value: ["true"]`
-- O objeto task traz `depth` (0 = raiz), `parental_info.{parent_task_id, root_task_id}` e `status.{id, name, is_closed_type}`.
 
 Campos principais do **Create Task** [1]:
 
@@ -368,15 +469,139 @@ Campos principais do **Create Task** [1]:
 
 ---
 
+## 🧪 Sonda de ESCRITA em portal real (2026-09-30) — o que só a chamada revelou
+
+Projeto descartável criado, hierarquia montada, medida e apagada. Sete achados que **nenhuma doc e
+nenhuma busca** deram, e cada um é decisão de adapter:
+
+| # | achado | evidência |
+|---|---|---|
+| 1 | o segmento é **`portal` singular** | `/api/v3/portal/{id}/projects` → 200 · `/api/v3/portals/{id}/projects` → 400 `URL_RULE_NOT_CONFIGURED` |
+| 2 | **vínculo é OBJETO ANINHADO, não `*_id`** | `{"milestone":{"id":"…"}}` vincula · `{"milestone_id":"…"}` é **aceito e IGNORADO em silêncio** (a tasklist nasce em milestone `None`) |
+| 3 | o update é **PATCH**, e só | `PUT` e `POST` no recurso devolvem `INVALID_METHOD` |
+| 4 | status se muda por **`status`**, objeto com `id` | `{"status":{"id":"…"}}` → 200 · `{"custom_status": <nome ou id>}` → `INVALID_PARAMETER_VALUE` nas duas formas |
+| 5 | **não achei endpoint que LISTE os status** | `taskstatuses`, `statuses`, `customstatus`, `custom_status`, `settings/statuses` e o equivalente V2: todos 400. O id do status vem **de dentro da própria task** |
+| 6 | o erro de validação **nomeia o campo** | `EXTRA_KEY_FOUND_IN_JSON` + `details[].field_name: "owner"` — dá para tratar com precisão |
+| 7 | o `login_id` da V2 é o **usuário**, não um portal id | as duas versões usam o mesmo id de portal no caminho; o `login_id` bate com `owner.id` da V3, e usá-lo na URL dá **404 `6504 Domain Not Available`** (achado corrigido por medição; a 1ª redação estava invertida) |
+| 8 | **remover projeto é `POST …/trash`**, não `DELETE` | `DELETE /projects/{id}` → 404 (e o erro cita `method: POST`) · `DELETE /projects/{id}/` → 400 · **`POST /projects/{id}/trash` → 204** · e o `PATCH` seguinte devolve **410 Gone**, que é a confirmação por comportamento |
+
+**O achado nº 2 é o mais perigoso**, e por isso está aqui em primeiro lugar entre iguais: `milestone_id`
+não dá erro. A chamada devolve **200** e o vínculo simplesmente não acontece. Um adapter escrito por
+analogia com outras APIs (`*_id` em tudo) passaria em teste de status HTTP e produziria hierarquia
+silenciosamente quebrada. **Verificar o vínculo no corpo da resposta, nunca no código HTTP.**
+
+**Consequência do nº 5 para o mapeamento:** sem endpoint de listagem, o adapter descobre os status
+possíveis **lendo uma task do projeto** e guardando o `{id, name}`. `is_closed_type` vem no objeto e é o
+que distingue status terminal — é o que o `updateStatus` da abstração precisa para saber o que é "feito".
+
+**A sonda é reversível, e isso foi verificado:** depois do `trash`, a listagem do portal voltou a ter
+exatamente o projeto que existia antes. Uma sonda de escrita só é aceitável se o caminho de volta for
+medido — e o caminho de volta aqui **não** é o que se supõe (`DELETE` falha de duas formas diferentes).
+
+### Vocabulário: Zoho Projects não tem "épico"
+
+A hierarquia é `projeto → milestone → tasklist → task → subtask`. O equivalente funcional de épico é o
+**milestone** (tem data de início e fim, e agrupa tasklists) — a tasklist é o agrupador de segundo nível.
+Medido montando a árvore inteira: projeto → milestone → tasklist → task, com o vínculo do nº 2.
+
+## 🔌 MCP: não existe servidor NATIVO da Zoho para Projects
+
+Medido em 2026-09-30. A Zoho publica MCP oficial para **Analytics**, **não** para Projects. O que existe
+para Projects é de terceiro:
+
+| opção | natureza | limite |
+|---|---|---|
+| `qpiai/zoho-projects-mcp` | comunitário | manutenção de terceiro; cobre portal, projeto, task, issue, milestone, busca, usuários |
+| CData Zoho Projects MCP | comercial | **read-only**, e exige driver JDBC licenciado à parte + arquivo `.prp` de conexão |
+| wrappers de plataformas de integração | SaaS | acrescenta um intermediário entre você e a API |
+
+**Isto simplifica o desenho, e a doutrina da casa já dizia por quê:** o adapter é **API-first** e o MCP é
+transporte **opcional** (SDAAL). Sem MCP nativo não há atalho tentador — o adapter fala REST direto, que
+é o caminho provado por medição nesta KB. Um MCP de terceiro no meio acrescentaria uma dependência que
+não se controla e que fica entre o gate e o dado.
+
+⚠️ Sinal relatado pela comunidade e **não medido aqui**: o schema de ferramentas de um desses MCPs
+divergia da doc REST. Se algum dia um MCP entrar como transporte, ele entra **atrás** da abstração e com
+a divergência medida, nunca como fonte de verdade sobre a API.
+
+## 🗺️ Mapeamento método↔endpoint (o adapter do Onion)
+
+Derivado de **duas sondas de escrita** em portal real (2026-09-30), com projeto descartável e limpeza
+verificada. O adapter é [`adapters/zoho.md`](../../../.claude/utils/task-manager/adapters/zoho.md).
+
+| método da abstração | endpoint medido | achado que muda a implementação |
+|---|---|---|
+| `getProjectList` | `GET /portal/{p}/projects` | **array no topo**, sem envelope |
+| `getProject` | `GET …/projects/{id}` | — |
+| `createTask` | `POST …/projects/{pr}/tasks` | vínculo `{"tasklist":{"id":…}}` — objeto, não `*_id` |
+| `getTask` | `GET …/tasks/{id}` | o `status` vem como objeto com `is_closed_type` |
+| `updateTask` | **`PATCH`** …/tasks/{id}` | `PUT`/`POST` → `INVALID_METHOD` |
+| `deleteTask` | **`DELETE`** …/tasks/{id}` → 204 | ⚠️ **assimétrico**: projeto exige `POST …/trash` |
+| `createSubtask` | `POST …/tasks` com `{"parental_info":{"parent_task_id":…}}` | vínculo **aninhado**; filha nasce `depth: 1` e o pai vira `has_subtasks: true` (conferido no corpo). As formas PLANAS (`parent_task`, `parent`, `parent_task_id` no topo) dão 400, e a V2 devolve 201 com task RASA — duas redações anteriores erraram, uma em cada direção |
+| `getSubtasks` | filtrar no CLIENTE por `parental_info.parent_task_id` | `?parent_task=` é aceito e ignorado (lista inteira). O filtro por `criteria` que um adotante documenta NÃO foi localizado: `POST …/tasks/search` devolve `URL_RULE_NOT_CONFIGURED` — lacuna declarada, não inexistência |
+| `addComment` | `POST …/tasks/{id}/comments`, campo **`comment`** | resposta é **array**; `content`/`text`/`body` dão `LESS_THAN_MIN_OCCURANCE` |
+| `getComments` | `GET …/tasks/{id}/comments` | resposta é **objeto** `{comments, page_info}` — forma diferente do POST |
+| `updateStatus` | `PATCH …/tasks/{id}` com `{"status":{"id":…}}` | `custom_status` recusa **nome e id** |
+| `searchTasks` | `GET …/tasks` + filtro **no cliente** | ⚠️ **`?search=` não filtra** (prova abaixo) |
+| `getProjectList`/paginação | `page_info.has_next_page` | a listagem pagina; o array de projetos, não |
+
+### A prova de que os filtros são ignorados
+
+Mesmo projeto, 2 tasks, contagens medidas:
+
+```
+GET  /tasks                       → 2 tasks
+GET  /tasks?search=PAI            → 2
+GET  /tasks?search=ZZZINEXISTENTE → 2      ← termo que não existe
+GET  /tasks?parent_task=<id>      → 2      ← e inclui a PRÓPRIA task pai
+POST tasklist {"milestone_id":…}  → 200, e nasce em milestone None
+PATCH task {"owners":[…]}         → 200, e a atribuição não acontece
+PATCH task {"owner":{…}}          → 200, idem
+POST task {"depth":1}             → 200, e nasce com depth: 0
+```
+
+**Seis casos, todos HTTP 200.** "Parâmetro aceito e ignorado em silêncio" é **sistêmico** nesta API, não
+um caso — e é a regra que governa o adapter: *verificar no corpo da resposta, nunca no código HTTP.*
+O corolário útil: **todo vínculo é objeto aninhado** — `{"milestone":{"id":…}}`,
+`{"tasklist":{"id":…}}`, `{"status":{"id":…}}`, `{"owners_and_work":{"owners":[…]}}`.
+
+### Atribuição: `owners_and_work`, objeto, com `zpuid`
+
+```
+PATCH …/tasks/{id}   { "owners_and_work": { "owners": [ { "zpuid": "..." } ] } }
+```
+
+Achado por eliminação: `owners`/`owner` aceitos e ignorados; `assignees` → `INVALID_PARAMETER_VALUE`;
+`owners_and_work` como **array** → `JSON_PARSE_ERROR`, porque ele é objeto (traz também `work_type`,
+`total_work`, `unit`, `copy_task_duration`). O identificador é o **`zpuid`**, não o `zuid`.
+
+### Subtask na V3: o modelo tem, a escrita não está exposta
+
+Três rodadas de medição, e nenhuma achou caminho: `parent_task` recusa objeto, string e número (o campo
+**existe** — `INVALID_PARAMETER_VALUE`); `depth: 1` é aceito e ignorado; `association_info.parent_task`
+não vincula; quatro paths candidatos dão `URL_RULE_NOT_CONFIGURED`. **E no entanto** toda task traz
+`association_info.has_subtasks`. Nem a doc (SPA de >10 MB, não fetchável) nem busca de código no GitHub
+deram resposta. **A V2 cria** (`parent_task_id`, 201) e sai de linha em 2026-12-31.
+
+### Os cinco títulos de erro, e por que a distinção economiza horas
+
+| `title` | significado medido |
+|---|---|
+| `URL_RULE_NOT_CONFIGURED` | o **path** não existe |
+| `EXTRA_KEY_FOUND_IN_JSON` | o campo **não existe** no recurso (`details[].field_name` diz qual) |
+| `INVALID_PARAMETER_VALUE` | o campo **existe**, o valor é inválido |
+| `LESS_THAN_MIN_OCCURANCE` | campo obrigatório **ausente** |
+| `INVALID_METHOD` | verbo errado |
+
+A diferença entre os dois do meio foi o que revelou que `parent_task` existe na V3 mas nenhum formato
+serve — sem ela, a conclusão teria sido "o campo não existe" e a V2 nunca seria testada.
+
 ## 🔗 Integração com o Sistema Onion
 
-- **Ainda não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
+- **Não é um provider do SDAAL de task manager.** `TASK_MANAGER_PROVIDER` aceita `jira | clickup |
   asana | linear | none` (ver [task-manager-abstraction](../concepts/task-manager-abstraction.md)).
   Operar tasks do Zoho via `/product:task` exigiria um **adapter novo** em
   `.claude/utils/task-manager/adapters/`, caminho de `/meta:create-abstraction` + sinal upstream ao core.
-  **Em andamento:** SAC-58. O mapeamento para `ITaskManager` (id composto `<project_id>.<task_id>`,
-  status, prioridade, cobertura dos métodos) está no
-  [ADR de mapeamento](../../technical-context/decisions/adr-zoho-projects-task-mapping.md).
 - **Segredos:** `ZOHO_*` no `.env`, carregado com `set -a; source .env; set +a`. Doutrina em
   [secret-handling-agent](../concepts/secret-handling-agent.md). Nunca imprimir o token em log ou chat.
 - **Configuração guiada:** `/meta:setup-integration` é o comando canônico para registrar as variáveis.
@@ -401,4 +626,4 @@ Campos principais do **Create Task** [1]:
 
 ---
 
-*Pesquisado e gerado em 2026-09-30 (no mesmo dia: v1.1 tarefas + automação; v1.2 cobertura completa para o adapter, conferida contra a doc oficial baixada) via `/meta:create-knowledge-base`. Nenhuma chamada real à API foi feita: os exemplos seguem a doc oficial e não foram executados contra um portal.*
+*Pesquisado e gerado em 2026-09-30 (v1.1 no mesmo dia: tarefas + automação) via `/meta:create-knowledge-base`. Nenhuma chamada real à API foi feita: os exemplos seguem a doc oficial e não foram executados contra um portal.*

@@ -1,6 +1,16 @@
+---
+versao: 1.1.0
+data: 2026-09-30
+categoria: platforms
+applies_to: "GLPI 11.0.x (API V1 + API V2) · GLPI 10.0.x (API V1 apenas)"
+verified_at: 2026-09-30
+verified_against: "absorvida de um adotante hub em 2026-09-30, com scrub. Linha 11.x conferida na fonte primária no dia (api.github.com/repos/glpi-project/glpi/releases/latest devolveu 11.0.10, publicada em 2026-09-30T09:25:10Z) — a busca web dizia 11.0.8, três releases atrás. Nenhuma instância real foi chamada."
+---
+
 # GLPI API — Knowledge Base
 
-> **Versão**: 1.1.0 | **Última atualização**: 2026-09-30 | **Categoria**: Platforms
+
+> **Categoria**: Platforms
 > Referência técnica das APIs do **GLPI** (ITSM / service desk / gestão de ativos, open source):
 > a **API legada V1** (`apirest.php`, App-Token + user_token + Session-Token) e a **API V2
 > "high-level"** do GLPI 11 (`/api.php/v2`, OAuth2 + Bearer). Tudo com fonte na documentação
@@ -289,9 +299,9 @@ Operadores: `contains`, `equals`, `notequals`, `lessthan`, `morethan`, `under`, 
 - **Frescor**: a V2 é nova (GLPI 11, 2025) e versionada em minor. Confira contra o Swagger da
   instância antes de decisão (`/meta:kb-freshness`;
   [verify-external-for-current](../concepts/verify-external-for-current.md)).
-- **Contexto GMill**: se o GLPI entrar como ferramenta de TI do grupo, registre no
+- **No seu projeto**: se o GLPI entrar como ferramenta de TI, registre no
   `docs/technical-context/` (versão da instância, V1/V2, entidades) e **não** trafegue dado de
-  paciente/consumidor em chamados (regra LGPD do `CLAUDE.md`).
+  pessoal sensível em chamados (a regra de proteção de dados do seu projeto).
 - KB irmã (mesma família, outra plataforma): [zoho-projects-api](zoho-projects-api.md).
 - **Integrações estudadas:** [GLPI → Zoho: chamado vira tarefa](../patterns/glpi-zoho-ticket-to-task.md).
 
