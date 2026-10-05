@@ -33,9 +33,9 @@ nodes:
     impact: 4
     confidence: 0.7
     verified_at: 2026-10-05
-    verified_against: kb-zoho-projects-api-tabela-multi-dc-sem-dc-brasil
+    verified_against: kb-zoho-projects-api-tabela-multi-dc-sem-dc-brasil-adiado-aguarda-gmill
     drive_kind: decision
-    label: "LGPD: em qual data center do Zoho os dados da GMill vão ficar, e com que base legal? A tabela de DCs da KB (US, EU, IN, AU, JP, CA, SA, UK, CN, UAE, SG) não tem Brasil, então qualquer escolha é transferência internacional (LGPD art. 33) e precisa de base para isso. O DC fica fixo na criação da conta Zoho [A VERIFICAR]: se a GMill já tem conta, a escolha já foi feita e a pergunta vira 'qual é, e está coberta?'."
+    label: "ADIADO pelo maestro em 2026-10-05: aguarda resposta da GMill, sem prazo; não cobrar antes disso. LGPD: em qual data center do Zoho os dados da GMill vão ficar, e com que base legal? A tabela de DCs da KB (US, EU, IN, AU, JP, CA, SA, UK, CN, UAE, SG) não tem Brasil, então qualquer escolha é transferência internacional (LGPD art. 33) e precisa de base para isso. O DC fica fixo na criação da conta Zoho [A VERIFICAR]: se a GMill já tem conta, a escolha já foi feita e a pergunta vira 'qual é, e está coberta?'."
 
   - id: D_LGPD_ZOHO_DC
     node_type: decision
@@ -56,10 +56,10 @@ nodes:
     impact: 5
     confidence: 1.0
     verified_at: 2026-10-05
-    verified_against: env-sem-variaveis-ZOHO-e-adapter-zoho-md-exige-client-id-secret-portal-id
+    verified_against: pass-ls-zoho-projects-6-entradas-conteudo-nao-lido-gpg-bloqueado
     drive_kind: decision
     trace: .claude/utils/task-manager/adapters/zoho.md
-    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado."
+    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado. LOCALIZADAS em 2026-10-05 no password-store do maestro, em zoho/projects/ (client_id, client_secret, portal_id, refresh_token, portal_login_id, how-to-get-token). Ainda não conferido: se o portal é o da GMill e qual é o DC (não há entrada para o accounts host)."
 
   - id: D_ZOHO_CREDENTIALS
     node_type: decision
@@ -71,7 +71,7 @@ nodes:
     verified_against: opcoes-levantadas-em-sessao-2026-10-05-contra-zoho-md-e-kb
     drive_kind: decision
     trace: .claude/utils/task-manager/adapters/zoho.md
-    label: "OPÇÕES — (A) Self client criado no portal da GMill por um admin da GMill, ligado a um usuário de serviço (não a conta pessoal de alguém), com os 5 escopos do zoho.md e nada além. (B) App OAuth server-based com redirect_uri; só se justifica com vários usuários ou várias orgs, o que não é o caso. (C) Validar antes num portal de teste (trial) fora da GMill; prova o adapter, mas não o portal real, e cria dado fora da GMill. SUGESTÃO: (A), depois de fechar o DC (D_LGPD_ZOHO_DC), porque ZOHO_ACCOUNTS_HOST depende dele. Os segredos ficam no .env local, nunca commitados, e quem gera é a GMill: o repo não guarda nem repete credencial."
+    label: "OPÇÕES — (A) Self client criado no portal da GMill por um admin da GMill, ligado a um usuário de serviço (não a conta pessoal de alguém), com os 5 escopos do zoho.md e nada além. (B) App OAuth server-based com redirect_uri; só se justifica com vários usuários ou várias orgs, o que não é o caso. (C) Validar antes num portal de teste (trial) fora da GMill; prova o adapter, mas não o portal real, e cria dado fora da GMill. SUGESTÃO: (A). As credenciais já existem no pass (ver Q_ZOHO_CREDENTIALS), então o DC já está dado por elas: registrar qual é, sem esperar a decisão de LGPD, que foi adiada. Os segredos ficam no .env local, nunca commitados, e quem gera é a GMill: o repo não guarda nem repete credencial."
 
 edges:
   - from: Q_LGPD_ZOHO_DC
@@ -82,7 +82,3 @@ edges:
     to: D_ZOHO_CREDENTIALS
     edge_type: DEPENDS_ON
     label: "A pergunta só fecha quando o maestro escolher uma das opções."
-  - from: D_ZOHO_CREDENTIALS
-    to: D_LGPD_ZOHO_DC
-    edge_type: DEPENDS_ON
-    label: "ZOHO_ACCOUNTS_HOST é o host do DC: gerar credencial antes de fechar o DC é trabalho que pode ser refeito."
