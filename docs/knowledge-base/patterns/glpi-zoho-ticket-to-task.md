@@ -1,3 +1,12 @@
+---
+versao: 1.0.0
+data: 2026-09-30
+categoria: patterns
+applies_to: "GLPI 11.0.x (API V1 + API V2) · Zoho Projects API V3 — o fluxo é desenho sobre as duas APIs, NADA foi executado contra instância real"
+verified_at: 2026-09-30
+verified_against: "absorvida de um adotante hub em 2026-09-30, com scrub. As duas KBs de origem foram medidas (GLPI na fonte primária; Zoho contra portal real); ESTE documento é o desenho que as combina e não foi executado."
+---
+
 # GLPI → Zoho Projects: chamado vira tarefa de projeto — Estudo e Fluxo
 
 > **Versão**: 1.0.0 | **Última atualização**: 2026-09-30 | **Categoria**: Patterns
@@ -119,7 +128,7 @@ Authorization: Bearer <zoho_access_token>        # escopo ZohoProjects.tasks.CRE
 Content-Type: application/json
 
 {
-  "name": "[GLPI #4521] Implantar leitor SNCM no CD Serra",
+  "name": "[GLPI #4521] Instalar o coletor no centro de distribuição",
   "description": "Origem: chamado GLPI #4521 — https://glpi.exemplo/front/ticket.form.php?id=4521\n\n<descrição sanitizada>",
   "tasklist": { "id": "<tasklist 'Entrada via GLPI'>" },
   "priority": "high",
@@ -196,8 +205,9 @@ acompanhamentos, mas isso dobra o ruído. Comece sem espelhar.
 
 ## 🔒 Segurança e LGPD
 
-- **Minimização**: envie ao Zoho só o necessário para executar. **Dado de paciente/consumidor
-  não trafega** (regra do `CLAUDE.md` deste repo). Filtre CPF, nomes de pacientes e anexos antes do POST.
+- **Minimização**: envie ao Zoho só o necessário para executar. **Dado pessoal sensível
+  não trafega** (a regra de dados sensíveis do seu projeto manda). Filtre identificadores diretos,
+  nomes de pessoas e anexos antes do POST.
 - **Assinatura dos dois lados**: o GLPI assina com SHA256 [1]. Para o webhook do Zoho, use um segredo
   próprio no header ou na URL e valide no middleware `[INFERÊNCIA]`.
 - **Credenciais mínimas**: GLPI V2 com usuário técnico de perfil mínimo (client_credentials não vale
@@ -237,14 +247,13 @@ acompanhamentos, mas isso dobra o ruído. Comece sem espelhar.
 
 ## 🔗 Integração com o Sistema Onion
 
-- **Onde o estudo vira decisão**: se a GMill adotar, registrar em `docs/technical-context/` e, sendo
+- **Onde o estudo vira decisão**: se o projeto adotar o padrão, registrar em `docs/technical-context/` e, sendo
   decisão arquitetural, como ADR (`@c4-documentation-specialist`). A escolha do middleware é a decisão a
   documentar.
 - **Onde vira trabalho**: `/product:spec` → `/product:task` (hoje no Linear, provider ativo) para a
   implementação. `/engineer:plan` se o middleware for código próprio.
 - **Validação**: o checklist acima segue a doutrina de testar modos de falha, não só o caminho feliz.
 - **KBs-base**: [glpi-api](../platforms/glpi-api.md) · [zoho-projects-api](../platforms/zoho-projects-api.md).
-- **ADR relacionado**: [adr-zoho-projects-task-mapping](../../technical-context/decisions/adr-zoho-projects-task-mapping.md), com o mapeamento do Zoho para o Task Manager do Onion (SAC-58). Ele não decide o middleware deste fluxo, mas fixa o id composto `<project_id>.<task_id>` e acrescenta o escopo `ZohoProjects.custom_fields.READ` (resolver `status.id` ao mudar status), que o Passo 5 (volta Zoho → GLPI) também precisa se atualizar status.
 
 ---
 
