@@ -56,10 +56,10 @@ nodes:
     impact: 5
     confidence: 1.0
     verified_at: 2026-10-05
-    verified_against: get-api-v3-portals-1-portal-pessoal-id-bate-com-pass-dc-us
+    verified_against: smoke-12-de-12-portal-pessoal-limpeza-conferida
     drive_kind: decision
     trace: .claude/utils/task-manager/adapters/zoho.md
-    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado. LOCALIZADAS em 2026-10-05 no password-store do maestro, em zoho/projects/ (client_id, client_secret, portal_id, refresh_token, portal_login_id, how-to-get-token). MEDIDO em 2026-10-05 (token client_credentials com escopo portals.READ, GET /api/v3/portals): a credencial funciona, o DC é US (accounts.zoho.com, conforme a nota how-to-get-token) e o ÚNICO portal visível é o pessoal do maestro, cujo id bate com o portal_id do pass. NÃO é o portal da GMill: serve para validar o adapter (opção C), não para operar a GMill."
+    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado. LOCALIZADAS em 2026-10-05 no password-store do maestro, em zoho/projects/ (client_id, client_secret, portal_id, refresh_token, portal_login_id, how-to-get-token). MEDIDO em 2026-10-05 (token client_credentials com escopo portals.READ, GET /api/v3/portals): a credencial funciona, o DC é US (accounts.zoho.com, conforme a nota how-to-get-token) e o ÚNICO portal visível é o pessoal do maestro, cujo id bate com o portal_id do pass. NÃO é o portal da GMill: serve para validar o adapter (opção C), não para operar a GMill. ADAPTER VALIDADO no portal pessoal em 2026-10-05: .env local montado do pass (TASK_MANAGER_PROVIDER=zoho) e smoke de 12 passos (projeto descartável, tasklist, task, subtask aninhada, comentário, getTask, updateTask, filtro de subtask no cliente, delete, projeto à lixeira e sumiço conferido) 12/12. Não exercitado: updateStatus para um status fechado."
 
   - id: D_ZOHO_CREDENTIALS
     node_type: decision
