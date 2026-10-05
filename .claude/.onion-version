@@ -1,9 +1,9 @@
 framework: onion-evolve
-source_commit: 547e2e3edf3b
-source_commit_date: 2026-09-30
+source_commit: ab08cde675fa
+source_commit_date: 2026-10-05
 role: hub
 adopted_from: https://github.com/marciocar/onion-evolve.git
 adopted_at: 2026-09-16
-updated_at: 2026-09-30
+updated_at: 2026-10-05
 mode: greenfield
 integration_branch: main

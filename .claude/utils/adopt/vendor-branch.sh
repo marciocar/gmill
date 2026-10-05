@@ -16,7 +16,7 @@
 #   vendor-branch.sh update <TARGET> <SOURCE_ROOT> <PIN> <INTEGRATION_BRANCH>
 #       Aplica o framework NOVO do core no onion/vendor (worktree) + durable-commit, depois mergeia na
 #       integração. Bootstrapa o vendor se ausente (legado). Exit: 0 merge limpo · 10 CONFLITO (humano
-#       resolve) · 2 erro de precondição.
+#       resolve) · 11 BASE CRUZADA · 12 arquivo do core não chegou à vendor (nada mergeado) · 2 precondição.
 #
 # Reusa: durable-commit.sh (commit no vendor) · o manifest L1+L2 (mesma superfície do adopt).
 # Determinístico, sem jq. Exercitado por lint-selftest.sh (run_vendor_branch_selftests).
@@ -81,7 +81,10 @@ _vendor_is_framework_pure() {  # <TARGET> <SOURCE_ROOT> <INTEGRATION_BRANCH> →
   mb="$(git -C "$T" merge-base "$VENDOR" "$IB" 2>/dev/null)" || return 0
   [ -n "$mb" ] || return 0
   mf="$(_manifest_positivo "$SRC")"; [ -n "$mf" ] || return 0   # aqui se COMPARA, não se transporta
-  changed="$(git -C "$T" diff --name-only "$mb" "$VENDOR" 2>/dev/null)" || return 0
+  # `core.quotePath=false`: com o default, nome acentuado sai ENTRE ASPAS e escapado, não casa com
+  # `^<raiz>/` e vira "arquivo alheio" — BASE CRUZADA falsa (rc=11) no 1º arquivo acentuado do core.
+  # Achado ao curar a mesma classe no transporte (2026-10-05): o bug era anterior e estava latente.
+  changed="$(git -c core.quotePath=false -C "$T" diff --name-only "$mb" "$VENDOR" 2>/dev/null)" || return 0
   [ -n "$changed" ] || return 0
   # Remove do diff tudo que está sob o manifesto de framework; o que sobrar é produto alheio.
   local p keep="$changed"
@@ -194,8 +197,11 @@ _update() {  # <TARGET> <SOURCE_ROOT> <PIN> <INTEGRATION_BRANCH>
   git -C "$T" worktree add -q "$wt" "$VENDOR" 2>/dev/null || { echo "ERRO: worktree do $VENDOR falhou." >&2; return 2; }
   local mf; mf="$(_manifest "$SRC")"
   [ -n "$mf" ] || { echo "ERRO: manifest vazio (core sem framework?)." >&2; git -C "$T" worktree remove --force "$wt" 2>/dev/null; return 2; }
+  # O sha é resolvido UMA vez: transporte e lista de exigidos saem do MESMO commit (Elenxo: com dois
+  # `git archive HEAD`, um commit no core entre eles divergia a lista do que de fato viajou).
+  local sha; sha="$(git -C "$SRC" rev-parse HEAD)"
   # shellcheck disable=SC2046
-  ( cd "$SRC" && git archive HEAD -- $(printf '%s ' $mf) ) | tar -x -C "$wt" 2>/dev/null
+  ( cd "$SRC" && git archive "$sha" -- $(printf '%s ' $mf) ) | tar -x -C "$wt" 2>/dev/null
   # CURA (D_CURE, 2026-08-24): o baseline de catraca é LEDGER LOCAL do adotante — só encolhe por
   # medição e é a memória da dívida DELE. Não é framework, e o update NUNCA deve ADIANTAR nem ADICIONAR
   # o baseline do core ao vendor. O manifest inclui `.claude/validation/` inteiro, então o `tar -x`
@@ -223,8 +229,41 @@ _update() {  # <TARGET> <SOURCE_ROOT> <PIN> <INTEGRATION_BRANCH>
     fi
   done
   # <<< D_CURE-baseline-preserve <<<
-  bash "$HERE/durable-commit.sh" "$wt" update "$PIN" "$VENDOR" >/dev/null 2>&1
+  # ── O QUE VEIO DO CORE TEM DE CHEGAR À VENDOR (sinal de campo de um hub, 2026-10-04) ─────────────
+  # A lista é a do PRÓPRIO transporte (`git archive … | tar -t`, que já respeita os `:(exclude)`), menos
+  # os baselines de catraca que o bloco acima remove de propósito. Ela vai ao durable-commit, que a
+  # staja com `-f`: um .gitignore da vendor que cubra `.claude/` fazia o `git add` pular todo arquivo
+  # NOVO em silêncio, e o update dizia "merge limpo" (17 arquivos perdidos em dois updates no campo).
+  # A LISTA sai de um índice TEMPORÁRIO do mesmo sha: `ls-files` aplica a semântica de pathspec do git
+  # inteira (inclusive `:(exclude)`, que o `ls-tree` recusa) e, com `-z`, nunca escapa nome. A 1ª versão
+  # usava `tar -t`, que escapa acento em octal sob LC_ALL=C: o 1º arquivo acentuado do core derrubaria o
+  # update de TODO adotante com rc=12 falso (Elenxo, executado com `decisão-teste.md`).
+  local req idx; req="$(mktemp)"; idx="$(mktemp)"; rm -f "$idx"
+  # shellcheck disable=SC2046
+  GIT_INDEX_FILE="$idx" git -C "$SRC" read-tree "$sha" 2>/dev/null \
+    && GIT_INDEX_FILE="$idx" git -C "$SRC" ls-files -z -- $(printf '%s ' $mf) 2>/dev/null \
+       | grep -zvE '^\.claude/validation/[^/]*-baseline\.txt$' | LC_ALL=C sort -zu > "$req"
+  rm -f "$idx"
+  [ -s "$req" ] || { echo "ERRO: a lista do que o core transporta saiu VAZIA (sha ${sha:0:12}) — recuso seguir sem ela." >&2
+                     git -C "$T" worktree remove --force "$wt" 2>/dev/null; rm -f "$req"; return 12; }
+  local _dc=0
+  ONION_REQUIRED_LIST="$req" ONION_REQUIRED_NUL=1 bash "$HERE/durable-commit.sh" "$wt" update "$PIN" "$VENDOR" >/dev/null 2>"$req.err" || _dc=$?
   git -C "$T" worktree remove --force "$wt" 2>/dev/null
+  if [ "$_dc" -ne 0 ]; then
+    echo "ERRO: o commit durável do $VENDOR NÃO levou o framework inteiro (durable-commit rc=$_dc) — NADA foi mergeado." >&2
+    sed 's/^/  /' "$req.err" >&2
+    rm -f "$req" "$req.err"; return 12
+  fi
+  # PÓS-CONDIÇÃO na árvore COMMITADA (não no rc): todo arquivo transportado existe no $VENDOR.
+  local _lost
+  _lost="$(git -C "$T" ls-tree -r -z --name-only "$VENDOR" 2>/dev/null | LC_ALL=C sort -z \
+           | LC_ALL=C comm -z -13 - "$req" | tr '\0' '\n')"
+  rm -f "$req" "$req.err"
+  if [ -n "$_lost" ]; then
+    echo "ERRO: $(grep -c . <<< "$_lost") arquivo(s) do core@${sha:0:12} ausentes do $VENDOR depois do commit — NADA foi mergeado:" >&2
+    printf '%s\n' "$_lost" | head -20 | sed 's/^/    /' >&2
+    return 12
+  fi
 
   # BASE CRUZADA — recusa ANTES de mergear. Um despejo de N conflitos contábeis não é veredito,
   # é o maestro descobrindo sozinho o que a ferramenta já podia ter dito.

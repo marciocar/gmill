@@ -55,7 +55,7 @@ Content-Type: application/json
 | Operação | Método | Endpoint |
 |----------|--------|----------|
 | Criar task | POST | `/list/{list_id}/task` |
-| Obter task | GET | `/task/{task_id}?subtasks=true` |
+| Obter task | GET | `/task/{task_id}?include_subtasks=true` ⚠️ **não** `subtasks=true` (medido 2026-10-02: o legado devolve a task SEM o campo) |
 | Atualizar task | PUT | `/task/{task_id}` |
 | Deletar task | DELETE | `/task/{task_id}` |
 | Criar comentário | POST | `/task/{task_id}/comment` |
@@ -71,19 +71,39 @@ Content-Type: application/json
 
 Ativado quando `TASK_MANAGER_TRANSPORT=mcp` **e** o servidor MCP do ClickUp estiver disponível no ambiente.
 
+> ⚠️ **A grafia dos nomes foi corrigida em 2026-10-02 — a anterior não resolvia em lugar nenhum.**
+> As tabelas e o código citavam `mcp_ClickUp_clickup_*`, convenção da era **Cursor**, de quando o
+> Onion ainda buscava agnosticismo. No Claude Code uma ferramenta MCP se chama
+> `mcp__<alias-do-servidor>__<nome-da-ferramenta>`, e o nome documentado pelo ClickUp é
+> `clickup_*` — logo `mcp__clickup__clickup_get_task`, **se** o servidor estiver registrado com o
+> alias `clickup`. **O alias é escolha de quem configura**: a tabela abaixo mostra o padrão, não
+> uma garantia. Confira o nome efetivo no seu ambiente antes de ligar o transporte MCP.
+>
+> - **Endpoint do servidor remoto:** `https://mcp.clickup.com/mcp`.
+> - **NADA IMPEDE A GRAFIA ANTIGA DE VOLTAR, e isto é teto declarado:** a REGRA 10 (Tool MCP de
+>   provider direto em comando/agente) conhece o padrão `mcp_ClickUp_` **mas allowlista o caminho
+>   `*/utils/task-manager/adapters/*`** — foi por essa porta que 19 menções sobreviveram desde a era
+>   Cursor sem ninguém notar. A correção de hoje é **one-off**; o mecanismo que a tornaria
+>   permanente (cobrar a FORMA `mcp__<alias>__` dentro do adapter) precisa de guarda e caso de
+>   bancada próprios. Gatilho nomeado: a próxima grafia antiga que aparecer num adapter.
+> - **Inconsistência DECLARADA, não resolvida:** a documentação do provider lista uma ferramenta de
+>   remoção cujo nome divergia entre páginas. Não medi qual responde, então `delete_task` fica
+>   marcado abaixo como **não-verificado** — e o caminho API (`DELETE /task/{id}`), que é o default,
+>   não depende disso.
+
 Quando ativo, substitui os `fetch` calls pelas funções MCP equivalentes:
 
 | Via API (padrão) | Via MCP (opcional) |
 |------------------|--------------------|
-| `POST /list/{id}/task` | `mcp_ClickUp_clickup_create_task(...)` |
-| `GET /task/{id}` | `mcp_ClickUp_clickup_get_task(...)` |
-| `PUT /task/{id}` | `mcp_ClickUp_clickup_update_task(...)` |
-| `DELETE /task/{id}` | `mcp_ClickUp_clickup_delete_task(...)` |
-| `POST /task/{id}/comment` | `mcp_ClickUp_clickup_create_task_comment(...)` |
-| `GET /task/{id}/comment` | `mcp_ClickUp_clickup_get_task_comments(...)` |
-| `GET /team/{wid}/task` | `mcp_ClickUp_clickup_search(...)` |
-| Hierarquia workspace | `mcp_ClickUp_clickup_get_workspace_hierarchy(...)` |
-| `GET /list/{id}` | `mcp_ClickUp_clickup_get_list(...)` |
+| `POST /list/{id}/task` | `mcp__clickup__clickup_create_task(...)` |
+| `GET /task/{id}` | `mcp__clickup__clickup_get_task(...)` |
+| `PUT /task/{id}` | `mcp__clickup__clickup_update_task(...)` |
+| `DELETE /task/{id}` | `mcp__clickup__clickup_delete_task(...)` ⚠️ nome **não-verificado** |
+| `POST /task/{id}/comment` | `mcp__clickup__clickup_create_task_comment(...)` |
+| `GET /task/{id}/comment` | `mcp__clickup__clickup_get_task_comments(...)` |
+| `GET /team/{wid}/task` | `mcp__clickup__clickup_search(...)` |
+| Hierarquia workspace | `mcp__clickup__clickup_get_workspace_hierarchy(...)` |
+| `GET /list/{id}` | `mcp__clickup__clickup_get_list(...)` |
 
 Se `TASK_MANAGER_TRANSPORT=mcp` mas o servidor MCP não estiver disponível, o adapter cai para API automaticamente (fallback gracioso).
 
@@ -100,7 +120,8 @@ Se `TASK_MANAGER_TRANSPORT=mcp` mas o servidor MCP não estiver disponível, o a
  * - OPCIONAL: MCP ClickUp (TASK_MANAGER_TRANSPORT=mcp, quando servidor disponível)
  *
  * Formatação de conteúdo:
- * - Descrições de tasks: Markdown nativo (campo markdown_description)
+ * - Descrições de tasks: Markdown nativo (campo markdown_content no REQUEST;
+ *   markdown_description existe só na RESPOSTA — confundir os dois foi o bug de 2026-10-02)
  * - Comentários: formatação visual Unicode (independente do transporte)
  */
 class ClickUpAdapter implements ITaskManager {
@@ -162,17 +183,24 @@ class ClickUpAdapter implements ITaskManager {
     const payload = {
       name: input.name,
       description: input.description,
-      markdown_description: input.markdownDescription,
+      markdown_content: input.markdownDescription,   // REQUEST usa markdown_content
       priority: this.mapPriorityToClickUp(input.priority),
-      due_date: input.dueDate,
-      start_date: input.startDate,
+      // As flags derivam do valor CONVERTIDO, nunca do input cru: um ISO inválido deixava
+      // `due_date_time: true` sem `due_date`. E `start_date` tinha a mesma exposição ao fuso que
+      // `due_date` e estava sem flag — o comentário de toClickUpMs chamava a flag de OBRIGATÓRIA
+      // e eu a aplicara a metade dos campos.
+      due_date: this.toClickUpMs(input.dueDate),      // API quer Unix ms, não ISO
+      due_date_time: this.toClickUpMs(input.dueDate) !== undefined ? true : undefined,
+      start_date: this.toClickUpMs(input.startDate),
+      start_date_time: this.toClickUpMs(input.startDate) !== undefined ? true : undefined,
+      time_estimate: input.timeEstimate ? input.timeEstimate * 60000 : undefined,
       assignees: input.assignees,
       tags: input.tags
     };
 
     if (this.useMcp) {
       // Via MCP
-      const result = await mcp_ClickUp_clickup_create_task({
+      const result = await mcp__clickup__clickup_create_task({
         workspace_id: this.workspaceId,
         list_id: listId,
         ...payload
@@ -187,32 +215,63 @@ class ClickUpAdapter implements ITaskManager {
 
   async getTask(taskId: string): Promise<TaskOutput> {
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_get_task({
+      const result = await mcp__clickup__clickup_get_task({
         workspace_id: this.workspaceId,
         task_id: taskId,
-        subtasks: true
+        include_subtasks: true
       });
       return this.normalizeTask(JSON.parse(result.content[0].text));
     }
 
-    const data = await this.api<any>('GET', `/task/${taskId}?subtasks=true`);
+    // include_subtasks (não `subtasks`): medido ao vivo em 2026-10-02 — `include_subtasks=true`
+    // devolveu 42 subtasks; `subtasks=true` devolveu a task SEM o campo. Com o parâmetro
+    // legado, getTask/getSubtasks retornam VAZIO e quebram /engineer:start, /engineer:work,
+    // validate-phase-sync e checklist-sync em todo repo que use este provider.
+    const data = await this.api<any>('GET', `/task/${taskId}?include_subtasks=true`);
     return this.normalizeTask(data);
   }
 
   async updateTask(taskId: string, updates: UpdateTaskInput): Promise<TaskOutput> {
+    // STATUS É CONFIGURADO POR LIST — não existe vocabulário global no ClickUp. Por isso o nome
+    // canônico só se resolve CONTRA a List da task (decisão selada pelo maestro 2026-10-02). Sem
+    // sinônimo casando, o campo é OMITIDO e a task mantém o status atual: um status inventado
+    // devolve `400 Status not found`, e inventar silenciosamente seria pior que não mexer.
+    const resolvedStatus = updates.status
+      ? await this.resolveStatusForTask(taskId, updates.status)
+      : undefined;
+
     const payload = {
       name: updates.name,
       description: updates.description,
-      markdown_description: updates.markdownDescription,
-      status: updates.status ? this.mapStatusToClickUp(updates.status) : undefined,
+      markdown_content: updates.markdownDescription,  // REQUEST usa markdown_content
+      status: resolvedStatus,
       priority: updates.priority ? this.mapPriorityToClickUp(updates.priority) : undefined,
-      due_date: updates.dueDate,
-      start_date: updates.startDate,
+      due_date: this.toClickUpMs(updates.dueDate),
+      due_date_time: this.toClickUpMs(updates.dueDate) !== undefined ? true : undefined,
+      start_date: this.toClickUpMs(updates.startDate),
+      start_date_time: this.toClickUpMs(updates.startDate) !== undefined ? true : undefined,
+      time_estimate: updates.timeEstimate ? updates.timeEstimate * 60000 : undefined,
+      // ⚠️ `assignees` vai como ARRAY SIMPLES, e isto é TETO DECLARADO, não medição: o adendo do
+      // adotante registra que `{add, rem}` FUNCIONA e que o array simples TAMBÉM devolve 200 — e
+      // "devolve 200" foi exatamente o critério que condenou as tags. Ninguém mediu o EFEITO do
+      // array simples aqui. Gatilho: a próxima medição ao vivo resolve, ou isto migra para {add,rem}.
       assignees: updates.assignees
+      // ⚠️ TAGS NÃO VÃO NO BODY DO PUT — medido ao vivo por um adotante em 2026-10-02 (24 chamadas
+      // REST, tasks criadas e apagadas, limpeza confirmada por 404): tags no corpo do PUT devolvem
+      // 200 E NÃO FAZEM NADA. Só `POST /task/{id}/tag/{name}` e `DELETE /task/{id}/tag/{name}`
+      // mudam tags. Eu tinha "consertado" isto ADICIONANDO tags aqui — campo que silenciosamente
+      // não faz nada é PIOR que campo ausente, porque parece consertado. Quem precisa mexer em tag
+      // chama o endpoint dedicado; a `under-review` do /engineer:pr nunca seria aplicada por aqui.
     };
 
+    // `tags` CONTINUA no contrato de UpdateTaskInput mas NÃO é enviada (ver a nota no payload).
+    // Descartar em silêncio é o mesmo defeito que o PUT da API tem — só movido para cá. Avisa.
+    if (updates.tags && updates.tags.length > 0) {
+      console.warn(`⚠️  ClickUp: 'tags' NÃO é aplicada por updateTask (o body do PUT devolve 200 sem efeito). Use POST/DELETE /task/${taskId}/tag/{name}. Tags ignoradas: ${updates.tags.join(', ')}`);
+    }
+
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_update_task({
+      const result = await mcp__clickup__clickup_update_task({
         workspace_id: this.workspaceId,
         task_id: taskId,
         ...payload
@@ -227,7 +286,7 @@ class ClickUpAdapter implements ITaskManager {
   async deleteTask(taskId: string): Promise<boolean> {
     try {
       if (this.useMcp) {
-        await mcp_ClickUp_clickup_delete_task({
+        await mcp__clickup__clickup_delete_task({
           workspace_id: this.workspaceId,
           task_id: taskId
         });
@@ -252,14 +311,14 @@ class ClickUpAdapter implements ITaskManager {
     const payload = {
       name: input.name,
       description: input.description,
-      markdown_description: input.markdownDescription,
+      markdown_content: input.markdownDescription,   // REQUEST usa markdown_content
       priority: this.mapPriorityToClickUp(input.priority),
       tags: input.tags,
       parent: parentId   // ← Torna subtask
     };
 
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_create_task({
+      const result = await mcp__clickup__clickup_create_task({
         workspace_id: this.workspaceId,
         list_id: listId,
         ...payload
@@ -282,7 +341,7 @@ class ClickUpAdapter implements ITaskManager {
 
   async addComment(taskId: string, comment: string): Promise<CommentOutput> {
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_create_task_comment({
+      const result = await mcp__clickup__clickup_create_task_comment({
         workspace_id: this.workspaceId,
         task_id: taskId,
         comment_text: comment
@@ -300,7 +359,7 @@ class ClickUpAdapter implements ITaskManager {
 
   async getComments(taskId: string): Promise<CommentOutput[]> {
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_get_task_comments({
+      const result = await mcp__clickup__clickup_get_task_comments({
         workspace_id: this.workspaceId,
         task_id: taskId
       });
@@ -330,7 +389,7 @@ class ClickUpAdapter implements ITaskManager {
     }
 
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_search({
+      const result = await mcp__clickup__clickup_search({
         workspace_id: this.workspaceId,
         keywords: query.text,
         filters: { asset_types: ['task'] }
@@ -365,7 +424,7 @@ class ClickUpAdapter implements ITaskManager {
     const projects: ProjectOutput[] = [];
 
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_get_workspace_hierarchy({
+      const result = await mcp__clickup__clickup_get_workspace_hierarchy({
         workspace_id: this.workspaceId,
         max_depth: 2
       });
@@ -405,7 +464,7 @@ class ClickUpAdapter implements ITaskManager {
 
   async getProject(projectId: string): Promise<ProjectOutput> {
     if (this.useMcp) {
-      const result = await mcp_ClickUp_clickup_get_list({
+      const result = await mcp__clickup__clickup_get_list({
         workspace_id: this.workspaceId,
         list_id: projectId
       });
@@ -514,33 +573,142 @@ class ClickUpAdapter implements ITaskManager {
     return projects;
   }
 
+  // ENTRADA (ClickUp → Onion). Tabela PRÓPRIA, deliberadamente NÃO derivada de STATUS_SYNONYMS:
+  // os dois sentidos resolvem problemas diferentes. Na saída é 1→N com filtro de disponibilidade
+  // (qual dos meus sinônimos esta List aceita); na entrada é N→1 com POLÍTICA DE COLISÃO — 'closed'
+  // é sinônimo de `done` E nome próprio de `closed`, e só uma ordem explícita decide. Derivar por
+  // inversão daria o empate ao primeiro canônico iterado, trocando `closed → closed` por
+  // `closed → done` sem que ninguém notasse. `statusRaw` preserva sempre a grafia original.
   private normalizeStatus(clickupStatus?: string): TaskStatus {
     const statusMap: Record<string, TaskStatus> = {
       'backlog': 'backlog',
       'bakclog': 'backlog',   // typo comum no ClickUp
+      'ideas': 'backlog',
+      'icebox': 'backlog',
       'to do': 'todo',
+      'todo': 'todo',
       'open': 'todo',
+      'not started': 'todo',
+      'pending': 'todo',
+      'in refinement': 'backlog',
+      'refinement': 'backlog',
       'in progress': 'in_progress',
+      'in-progress': 'in_progress',
+      // `pause` existe na List medida e não tem canônico próprio no Onion (não há `blocked`).
+      // `in_progress` é o menos errado — a task COMEÇOU — e `statusRaw` preserva `pause` para
+      // quem precisar distinguir. Teto declarado, não omissão.
+      'pause': 'in_progress',
+      'paused': 'in_progress',
+      'on hold': 'in_progress',
+      'doing': 'in_progress',
+      'wip': 'in_progress',
+      'started': 'in_progress',
       'in review': 'review',
       'review': 'review',
+      'pull request': 'review',
+      'pr': 'review',
+      'code review': 'review',
+      'reviewing': 'review',
+      'qa': 'review',
+      'testing': 'review',
       'done': 'done',
       'complete': 'done',
-      'closed': 'closed'
+      'completed': 'done',
+      'resolved': 'done',
+      'closed': 'closed',       // nome próprio vence o sinônimo de `done` — ver a nota acima
+      'archived': 'closed',
+      'canceled': 'canceled',
+      'cancelled': 'canceled',
+      'wont do': 'canceled',
+      "won't do": 'canceled'
     };
-    return statusMap[clickupStatus?.toLowerCase() || ''] || 'todo';
+    const hit = statusMap[clickupStatus?.toLowerCase() || ''];
+    if (hit) return hit;
+    // FALLBACK QUE AVISA. O anterior devolvia `todo` em silêncio, então uma List com nomes próprios
+    // ('pull request', 'in refinement', 'pause') fazia `validate-phase-sync` e `checklist-sync`
+    // lerem `todo` para tasks em revisão — e nada apontava. A escrita já avisava; a leitura não.
+    if (clickupStatus) {
+      console.warn(`⚠️  ClickUp: status '${clickupStatus}' não tem canônico Onion — lido como 'todo'. statusRaw preserva o original; acrescente o sinônimo se este nome for comum na sua List.`);
+    }
+    return 'todo';
   }
 
-  private mapStatusToClickUp(status: TaskStatus): string {
-    const statusMap: Record<TaskStatus, string> = {
-      'backlog': 'backlog',
-      'todo': 'to do',
-      'in_progress': 'in progress',
-      'review': 'review',
-      'done': 'done',
-      'closed': 'closed',
-      'canceled': 'closed'
-    };
-    return statusMap[status] || 'to do';
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STATUS POR LIST — a decisão selada (maestro, 2026-10-02)
+  //
+  // POR QUE NÃO HÁ TABELA FIXA: no ClickUp o conjunto de status é propriedade da LIST (ou do
+  // Space/Folder de onde ela herda), não do workspace. A versão anterior mapeava `review → 'review'`
+  // às cegas; a medição ao vivo do adotante mostrou uma List cujos status eram
+  // `to do / in progress / complete` — ou seja, `review` NÃO EXISTIA lá, e todo `updateStatus` do
+  // /engineer:pr devolvia `400`. Mapa fixo contra vocabulário configurável é o mesmo erro de
+  // `priority: 'high'`: parece certo e falha em runtime.
+  //
+  // O QUE FICA CANÔNICO: os `TaskStatus` do Onion (`review` inclusive) seguem a moeda interna. O
+  // adapter TRADUZ na fronteira, por sinônimos, contra o que a List de fato oferece.
+  // ⚠️ A ORDEM É O VEREDITO, e um Elenxo me pegou nela: a primeira versão desta tabela punha
+  // `testing` em `review` e OMITIA `pull request` — logo, na List que o adotante mediu
+  // (`… testing, pull request, done, Closed`), `/engineer:pr` moveria a task para **testing**.
+  // Trocar um `400` por um status ERRADO E SILENCIOSO é piorar: o 400 avisa, o status errado não.
+  // Os sinônimos vão do mais específico ao mais genérico, e os nomes da List medida vêm primeiro.
+  private static readonly STATUS_SYNONYMS: Record<TaskStatus, string[]> = {
+    'backlog':     ['backlog', 'bakclog', 'in refinement', 'refinement', 'ideas', 'icebox'],
+    'todo':        ['to do', 'todo', 'open', 'not started', 'pending'],
+    'in_progress': ['in progress', 'in-progress', 'doing', 'wip', 'started'],
+    'review':      ['review', 'in review', 'pull request', 'code review', 'reviewing', 'qa', 'testing'],
+    'done':        ['done', 'complete', 'completed', 'closed', 'resolved'],
+    'closed':      ['closed', 'done', 'complete', 'completed', 'archived'],
+    'canceled':    ['canceled', 'cancelled', 'wont do', "won't do", 'closed']
+  };
+
+  // Cache POR SESSÃO, nunca persistido: status de List muda por configuração do usuário, e um
+  // cache durável mentiria depois. Chave = listId.
+  private statusCache = new Map<string, string[]>();
+
+  private async listStatuses(listId: string): Promise<string[]> {
+    const cached = this.statusCache.get(listId);
+    if (cached) return cached;
+    const list = await this.api<any>('GET', `/list/${listId}`);
+    const names: string[] = (list?.statuses || [])
+      .map((s: any) => s?.status)
+      .filter((n: any): n is string => typeof n === 'string' && n.length > 0);
+    this.statusCache.set(listId, names);
+    return names;
+  }
+
+  // Resolve o status canônico para o nome REAL da List da task. `undefined` = não há sinônimo,
+  // o chamador OMITE o campo (mantém o status atual) e o aviso diz o que a List oferece.
+  private async resolveStatusForTask(taskId: string, status: TaskStatus): Promise<string | undefined> {
+    // FAIL-CLOSED, e esta foi uma correção de Elenxo: a 1ª versão tinha `catch { listId = undefined }`,
+    // que transformava falha de REDE TRANSITÓRIA em "esta List não tem o status" — e a operação
+    // devolvia sucesso com o status silenciosamente não aplicado. Erro de transporte tem de subir;
+    // ausência de status é outra coisa e tem o seu próprio aviso abaixo.
+    // TETO: este caminho não ramifica para MCP (os irmãos ramificam). Com TASK_MANAGER_TRANSPORT=mcp
+    // a resolução de status usa a REST API. Declarado, não escondido.
+    const raw = await this.api<any>('GET', `/task/${taskId}`);
+    const listId: string | undefined = raw?.list?.id;
+    if (!listId) {
+      console.warn(`⚠️  ClickUp: não resolvi a List da task ${taskId} — status '${status}' NÃO aplicado (a task mantém o atual).`);
+      return undefined;
+    }
+
+    const available = await this.listStatuses(listId);
+    if (available.length === 0) {
+      console.warn(`⚠️  ClickUp: a List ${listId} não declarou status — '${status}' NÃO aplicado.`);
+      return undefined;
+    }
+
+    const byLower = new Map(available.map(n => [n.toLowerCase(), n]));
+    for (const syn of ClickUpAdapter.STATUS_SYNONYMS[status] || []) {
+      const hit = byLower.get(syn.toLowerCase());
+      if (hit) return hit;   // devolve a grafia EXATA da List (o ClickUp é sensível a ela)
+    }
+
+    console.warn(
+      `⚠️  ClickUp: a List ${listId} não tem status equivalente a '${status}'. ` +
+      `Disponíveis: ${available.join(' | ')}. O campo foi OMITIDO — a task mantém o status atual ` +
+      `(mandar um nome inexistente devolve 400).`
+    );
+    return undefined;
   }
 
   private normalizePriority(clickupPriority?: string): TaskPriority | undefined {
@@ -553,13 +721,34 @@ class ClickUpAdapter implements ITaskManager {
     return priorityMap[clickupPriority?.toLowerCase() || ''];
   }
 
-  private mapPriorityToClickUp(priority?: TaskPriority): string | undefined {
+  // ISO (o tipo do domínio é `string`) → Unix MILISSEGUNDOS, que é o que a API aceita. Enviar o ISO
+  // cru era o bug carregado até 2026-10-02: a API não reclama, apenas não aplica a data.
+  //
+  // ⚠️ E O PAR `due_date_time: true` É OBRIGATÓRIO, medido ao vivo por um adotante em 2026-10-02:
+  // com `due_date_time=false` (o default) o ClickUp NORMALIZA para 07:00 e a data PODE CAIR NO DIA
+  // ANTERIOR pelo fuso do workspace. Mandar o timestamp exato com a flag ligada é o único jeito de
+  // a data voltar igual à que se enviou — confirmado: `due_date`/`time_estimate` em ms com a flag
+  // voltam exatos.
+  private toClickUpMs(iso?: string | null): number | undefined {
+    if (!iso) return undefined;
+    const ms = Date.parse(iso);
+    // NaN é entrada inválida: devolver undefined (campo omitido) em vez de mandar NaN, que a API
+    // aceitaria como erro silencioso. Guarda que não sabe nunca afirma — omite.
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+
+  // A API quer INTEGER (1 urgent … 4 low), nunca string — bug carregado ate 2026-10-02.
+  private mapPriorityToClickUp(priority?: TaskPriority): number | undefined {
     if (!priority) return undefined;
-    const priorityMap: Record<TaskPriority, string> = {
-      'urgent': 'urgent',
-      'high': 'high',
-      'normal': 'normal',
-      'low': 'low'
+    // ⚠️ O MAPA ANTIGO ERA IDENTIDADE ('urgent' → 'urgent'): ele NUNCA mapeou nada, só repassava a
+    // string do domínio — e a API responde `400 Priority invalid` a string. Medido ao vivo em
+    // 2026-10-02: só INTEIRO 1–4 é aceito. Trocar apenas a assinatura para `number` teria feito o
+    // tipo MENTIR sobre um corpo que devolve string; a cura é o mapa de verdade.
+    const priorityMap: Record<TaskPriority, number> = {
+      'urgent': 1,
+      'high': 2,
+      'normal': 3,
+      'low': 4
     };
     return priorityMap[priority];
   }
@@ -576,7 +765,7 @@ class ClickUpAdapter implements ITaskManager {
 |-----------|-------------|-------|
 | `name` | `name` | Direto |
 | `description` | `description` | Texto plano |
-| `markdownDescription` | `markdown_description` | Com formatação |
+| `markdownDescription` | `markdown_content` (request) | Com formatação. `markdown_description` é da RESPOSTA |
 | `status` | `status.status` | Mapeado |
 | `priority` | `priority.priority` | Mapeado |
 | `dueDate` | `due_date` | Timestamp ms |
@@ -601,7 +790,7 @@ class ClickUpAdapter implements ITaskManager {
 
 A formatação é específica do ClickUp e **independente do transporte escolhido** (API ou MCP).
 
-### Descrições de Tasks (`markdown_description`)
+### Descrições de Tasks (request: `markdown_content`)
 
 Use Markdown nativo:
 
@@ -647,138 +836,29 @@ Use formatação visual Unicode para legibilidade nos feeds do ClickUp:
 
 ---
 
-## 🧪 Exemplos de Uso
+## 🔧 Operação (exemplos, bulk, hierarquia, checklists, troubleshooting)
 
-```typescript
-// Via Factory (transporte definido pelo .env)
-const tm = getTaskManager(); // Retorna ClickUpAdapter se configurado
+Movidos para o irmão **[`clickup-operacao.md`](clickup-operacao.md)** em 2026-10-02, por
+*progressive disclosure* (`sdaal.md` §14.5): exemplos de uso, operações em lote, hierarquia de 3
+níveis, checklists nativos, troubleshooting e best practices. Este arquivo ficou com o **contrato e
+a implementação** — e com as **Notas Operacionais** abaixo, que são medição, não receita.
 
-// Criar task
-const task = await tm.createTask({
-  name: 'Nova Feature',
-  markdownDescription: '## Objetivo\nImplementar funcionalidade X',
-  priority: 'high',
-  tags: ['feature', 'v2']
-});
-
-// Criar subtask
-const subtask = await tm.createSubtask(task.id, {
-  name: 'Fase 1: Setup'
-});
-
-// Atualizar status
-await tm.updateStatus(subtask.id, 'in_progress');
-
-// Adicionar comentário com formatação Unicode
-await tm.addComment(task.id, [
-  '━━━━━━━━━━━━━━━━━━━━━━━',
-  '▶ Desenvolvimento iniciado',
-  `🕐 ${new Date().toISOString()}`
-].join('\n'));
-```
-
----
-
-## ⚡ Operações em Lote (Bulk)
-
-> Detalhe específico do ClickUp. Via abstração, o consumidor usa `createTask`/`createSubtask`; o adapter aplica internamente a regra abaixo.
-
-**Quando usar bulk:** criar múltiplas tasks **independentes no mesmo nível**; atualizar status de várias tasks.
-
-**Limitação crítica — bulk NÃO suporta hierarquia.** O endpoint de criação em lote **ignora** o `parent`. Para hierarquia (task → subtasks), use criação **sequencial** com `parent`:
-
-```javascript
-// ❌ ERRADO — parent ignorado no bulk
-await create_bulk_tasks({ tasks: [{ name: 'Sub 1', parent: mainId }, { name: 'Sub 2', parent: mainId }] });
-
-// ✅ CORRETO — sequencial preserva hierarquia
-const sub1 = await create_task({ name: 'Sub 1', parent: mainId });
-const sub2 = await create_task({ name: 'Sub 2', parent: mainId });
-```
-
-✅ bulk para: tasks independentes no mesmo nível · ❌ bulk para: hierarquia.
-
----
-
-## 🏗️ Hierarquia de Tasks (3 níveis)
-
-```
-📋 TASK (objetivo de alto nível)
-├── 🔧 Subtask 1 (componente)
-│   ├── ✅ Checklist item 1.1
-│   └── ✅ Checklist item 1.2
-└── 🔧 Subtask 2
-    └── ✅ Checklist item 2.1
-```
-
-**Implementação correta** — transporte default = **REST API** do adapter (`create_task` mapeia para `POST /list/{id}/task`); o `mcp_ClickUp_*` é apenas o transporte **opcional** via `TASK_MANAGER_TRANSPORT=mcp`:
-
-```javascript
-// 1. Task principal
-const mainTask = await create_task({
-  name: '🎯 Implementar Autenticação JWT',
-  listId: '<list_id>',
-  markdown_description: '## 🎯 Objetivo\nImplementar JWT...\n\n## ✅ Critérios\n- [ ] Login retorna JWT\n- [ ] Refresh funciona',
-  tags: ['feature', 'security'], priority: 'high'
-});
-
-// 2. Subtasks com parent (← CRITICAL para hierarquia)
-const sub1 = await create_task({ name: '🔧 Backend JWT Service', listId: '<list_id>', parent: mainTask.id, tags: ['subtask', 'backend'] });
-const sub2 = await create_task({ name: '🔧 Frontend Integration', listId: '<list_id>', parent: mainTask.id, tags: ['subtask', 'frontend'] });
-
-// 3. Comentário de setup (formatação Unicode — ver seção de Formatação)
-await create_task_comment({ task_id: mainTask.id, comment_text: '🚀 TASK SETUP COMPLETO\n━━━━━━━━━━━━\n▶ Subtasks: 2\n⏰ ' + new Date().toISOString() });
-```
-
----
-
-## ✅ Checklists Nativos
-
-Checklists nativos do ClickUp (diferentes de checkboxes em markdown) oferecem tracking interativo (resolved/unresolved), progresso visual e leitura via API. O Sistema Onion suporta estrutura híbrida: checkboxes em markdown (documentação) + checklists nativos (tracking).
-
-**Leitura e cálculo de progresso** (incluir `subtasks: true` no get para trazer checklists):
-
-```javascript
-const task = await getTask({ task_id: '<id>', subtasks: true });
-
-function calculateProgress(task) {
-  let total = 0, resolved = 0;
-  (task.checklists || []).forEach(c => { total += c.unresolved + c.resolved; resolved += c.resolved; });
-  return total > 0 ? (resolved / total * 100).toFixed(1) : 0;
-}
-// Progresso: `${calculateProgress(task)}%`
-```
-
----
-
-## 🔧 Troubleshooting (ClickUp)
-
-| Problema | Causa | Solução |
-|---|---|---|
-| Subtasks aparecem como tasks independentes | uso de `create_bulk_tasks` com `parent` | criar sequencial com `create_task({ parent })` (ver Hierarquia) |
-| Formatação quebrada em comments | markdown em comentário | usar Unicode visual (`━━━`, `▶`, `∟`); markdown só em `markdown_description` |
-| Auto-update não funciona | `context.md` sem task-id ou mapeamento fase→subtask ausente | validar com `/engineer/validate-phase-sync`; conferir `TASK_MANAGER_PROVIDER` e credenciais |
-| Checklists não aparecem | `get_task` sem `subtasks: true` | passar `subtasks: true` na leitura |
-
----
-
-## 💡 Best Practices (ClickUp)
-
-1. **Hierarquia na ordem certa**: task principal → subtasks com `parent` → comentário de setup.
-2. **Formatação por contexto**: `markdown_description` em Markdown; comentários em Unicode visual.
-3. **Sempre timestamp + status** em comentários de progresso.
-4. **Mapeamento fase→subtask** obrigatório no `context.md` da sessão.
-5. **Validar estrutura** após criação (`getTask({ subtasks: true })` → conferir `subtasks.length`).
-
----
 
 ## ⚠️ Notas Operacionais
 
 - **`CLICKUP_WORKSPACE_ID`** é obrigatório para busca (`searchTasks`) e listagem de projetos (`getProjectList`). Se ausente, essas operações lançam erro descritivo.
 - **Datas** no ClickUp são timestamps em milissegundos (inteiros). Converter com `new Date(parseInt(raw.due_date)).toISOString()`.
 - **IDs de tasks** ClickUp: 9 caracteres alfanuméricos (ex: `86abc1234`).
-- **Status** são configuráveis por espaço/lista no ClickUp; os mapeamentos acima cobrem os nomes padrão. Em listas com status customizados, usar `statusRaw` para inspecionar o valor original.
-- **Prioridade**: ClickUp aceita `urgent | high | normal | low` como string ou `1 | 2 | 3 | 4` como número.
+- **Status são propriedade da LIST**, não do workspace — e isso não é detalhe de borda: medido ao vivo
+  em 2026-10-02, uma List real oferecia `to do / in progress / complete`, sem nenhum `review`, e todo
+  `updateStatus` do `/engineer:pr` devolvia **`400 Status not found`**. Por isso não há mapa fixo de
+  saída: `resolveStatusForTask` lê `GET /list/{id}`, casa por sinônimos (`STATUS_SYNONYMS`) e devolve a
+  **grafia exata da List**. Sem equivalente, o campo é **omitido com aviso** e a task mantém o status
+  atual — nunca se inventa nome. `statusRaw` sempre preserva o valor original do provider.
+- **Prioridade**: **só INTEIRO `1 | 2 | 3 | 4`** (1 urgent … 4 low). String **NÃO** é aceita —
+  medido ao vivo em 2026-10-02: `priority: "high"` devolve **`400 Priority invalid`**. Esta linha
+  dizia o contrário até hoje, 245 linhas depois do comentário que registra a medição; era ela que
+  alguém lia para decidir.
 
 ---
 
@@ -792,5 +872,5 @@ function calculateProgress(task) {
 
 ---
 
-**Versão**: 2.0.0
-**Atualizado em**: 2026-06-13
+**Versão**: 2.1.0
+**Atualizado em**: 2026-10-02

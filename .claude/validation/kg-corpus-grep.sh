@@ -18,8 +18,61 @@ _KFP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kg-fixture-paths.sh"
 [ -f "${_KFP}" ] || { echo "ERRO: predicado de fixture ausente (${_KFP}) — sem ele a varredura de grafos ficaria VAZIA e verde por vacuidade." >&2; exit 2; }
 ROOT="${ONION_KG_CORPUS_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 JSON=0; ALL=0; TERMS=()
-for a in "$@"; do case "$a" in --json) JSON=1;; --all-status) ALL=1;; -h|--help) sed -n '2,10p' "$0"; exit 0;; *) TERMS+=("$a");; esac; done
-[ "${#TERMS[@]}" -gt 0 ] || { echo "uso: kg-corpus-grep.sh <termo> [termo...] [--json] [--all-status]" >&2; exit 2; }
+# `--query "<frase inteira>"` existe porque o CHAMADOR não consegue passar uma pergunta livre em
+# segurança: a skill onion-research injeta `$ARGUMENTS` por `!`backtick`` e precisa dele SEM quotes,
+# para que cada palavra vire um termo. Medido em 2026-10-01: uma pergunta com PARÊNTESES
+# ("JEV (jevtypesafeai.com): ...") produziu `syntax error near unexpected token '('` e **abortou a
+# invocação da skill inteira** — não degradou, matou. Com `--query` o chamador quota a frase e QUEM
+# separa em termos é este script, onde o texto já é dado e não código.
+# TETO DECLARADO: `"`, `` ` `` e `$` no texto do chamador ainda podem quebrar a injeção, porque um erro
+# de SINTAXE no eval não é capturável por `|| true`. Resolver isso exige o substrato passar argumento
+# fora da linha de comando; até lá, está escrito na skill.
+# `while`+`shift`, NÃO `for a in "$@"`: num `for` a lista é expandida ANTES da 1ª volta, então o
+# `shift` do `--query` não move a iteração e a frase entrava DUAS vezes — como termos e como termo
+# inteiro (medido na própria cura, em 2026-10-01).
+PHRASE=0; _WARN=""; TOP=""
+while [ "$#" -gt 0 ]; do case "$1" in
+  --json) JSON=1;;
+  --all-status) ALL=1;;
+  --query) shift; read -r -a _q <<< "${1:-}"; [ "${#_q[@]}" -gt 0 ] && TERMS+=("${_q[@]}");;
+  -h|--help) sed -n '2,10p' "$0"; exit 0;;
+  # ⚠️ TERMO POSICIONAL COM ESPACOS e tratado como `--query`, e DECLARADO (dano medido 2026-10-03):
+  #    `kg-corpus-grep.sh "auto-evolucao evolve laco raio-X auditoria"` casava a frase INTEIRA como UM
+  #    termo, nenhum label a continha e a saida foi `0 no(s)` sobre 120 grafos — zero que parece
+  #    "o corpus nao sabe nada disto" e na verdade era invocacao errada. A forma certa (`--query`)
+  #    existia; ninguem e obrigado a adivinhar qual das duas. Separar aqui e seguro porque aqui a
+  #    frase JA e dado, nunca codigo (o teto do eval esta documentado acima e nao muda).
+  # ⚠️ --phrase e a ESCOTILHA, e ela nasceu de reprovacao (Elenxo do PR #909, 2026-10-03): a 1a cura
+  #    separava TODO termo posicional com espacos e MATOU a busca-frase, sem alternativa — `--query`
+  #    tambem separa. Medido: `'o maestro'` devolvia 396 nos por casamento de frase no label e passou
+  #    a devolver 4114, porque `o` e substring de quase todo id. Trocar consulta precisa por esguicho
+  #    nao e cura; e a propria "ampliacao por termo generico" que a mensagem nova ensina a evitar.
+  --phrase) shift; [ -n "${1:-}" ] && { TERMS+=("$1"); PHRASE=1; };;
+  # ⚠️ --top EXISTE PARA O CORTE DECLARAR-SE, e nasceu de uma ASSIMETRIA reprovada (Elenxo do PR
+  #    #909): o `forge-census` foi obrigado a declarar o corte da projecao dele, e os consumidores
+  #    DESTE script seguiam cortando com `| head -N` em silencio — `onion-research/SKILL.md` injeta
+  #    40 de 298 achados, e 259 caiam sem uma palavra. Pior: a cura da frase AUMENTOU o resultado,
+  #    entao um zero falso e BARULHENTO virou um quarenta quieto e igualmente falso. Quem corta
+  #    aqui dentro conta o total antes de cortar; `head` nunca sabe o que descartou.
+  --top) shift; TOP="${1:-}";;
+  *) case "$1" in
+       *[[:space:]]*) read -r -a _p <<< "$1"
+                      [ "${#_p[@]}" -gt 0 ] && TERMS+=("${_p[@]}")
+                      # ⚠️ O AVISO E BUFFERIZADO, nunca emitido aqui: decidir no parse amarra o
+                      #    comportamento a ORDEM DOS FLAGS — `'frase' --json` tem JSON=0 nesta linha
+                      #    e o aviso escapava, que foi exatamente como a 1a cura do R7 falhou no
+                      #    proprio dogfood. Quem decide e o emissor, depois de TODOS os flags lidos.
+                      _WARN="kg-corpus-grep: termo posicional com espacos separado em ${#_p[@]} termos (igual a --query). Isto AMPLIA o resultado; para casar a frase LITERAL use --phrase \"$1\".";;
+       *) TERMS+=("$1");;
+     esac;;
+esac; shift; done
+case "${TOP}" in
+  '') : ;;
+  *[!0-9]*|0) printf 'kg-corpus-grep: --top invalido (%s) — inteiro >= 1. Recuso.\n' "${TOP}" >&2; exit 2 ;;
+esac
+# agora sim: todos os flags lidos, o emissor decide. Em --json o aviso viaja no payload (campo mode).
+[ -n "${_WARN}" ] && [ "${JSON}" != "1" ] && printf '%s\n' "${_WARN}" >&2
+[ "${#TERMS[@]}" -gt 0 ] || { echo "uso: kg-corpus-grep.sh <termo> [termo...] | --query \"<frase>\" | --phrase \"<frase literal>\" [--json] [--all-status]" >&2; exit 2; }
 if [ -n "${ONION_KG_CORPUS_FILES:-}" ]; then files="${ONION_KG_CORPUS_FILES}"
 # ⚠️ A isenção de FIXTURE vem do predicado ÚNICO kg-fixture-paths.sh (2026-09-05): antes cada
 #    consumidor repetia `grep -v '/fixtures/'` e o `__fixtures__/` do Vitest ESCAPAVA — 5 grafos
@@ -28,9 +81,13 @@ else files="$(cd "${ROOT}" && git ls-files '*.kg.yaml' 2>/dev/null | bash "${_KF
 [ -n "${files}" ] || { echo "kg-corpus-grep: FAIL-LOUD — nenhum .kg.yaml no corpus (${ROOT}); não devolvo '0 achados' por corpus vazio" >&2; exit 2; }
 LIST="$(mktemp)"; trap 'rm -f "${LIST}"' EXIT; printf '%s\n' "${files}" > "${LIST}"
 # a lista vai por ARQUIVO, não por pipe: o heredoc do python abaixo É o stdin (bug medido no 1º dogfood: "0 grafos")
-python3 - "${JSON}" "${ALL}" "${LIST}" "${TERMS[@]}" <<'PY'
+python3 - "${JSON}" "${ALL}" "${LIST}" "${PHRASE}" "${TOP:-0}" "${TERMS[@]}" <<'PY'
 import sys,re,json,os
-json_out=sys.argv[1]=="1"; all_status=sys.argv[2]=="1"; terms=[t.lower() for t in sys.argv[4:]]
+json_out=sys.argv[1]=="1"; all_status=sys.argv[2]=="1"
+# ⚠️ argv[4] e o flag PHRASE; os termos comecam em argv[5]. Em modo frase os termos NAO sao
+#    separados pelo chamador, entao a lista tem UM elemento e o casamento por substring ja e
+#    o casamento de frase que se quer — o flag existe para o RELATORIO nao mentir sobre o modo.
+phrase=sys.argv[4]=="1"; top=int(sys.argv[5] or 0); terms=[t.lower() for t in sys.argv[6:]]
 files=[l.strip() for l in open(sys.argv[3],encoding="utf-8") if l.strip()]
 hits=[]; graphs=0
 for f in files:
@@ -66,7 +123,15 @@ for f in files:
             node=None
             continue
         if node is None: continue
-        km=re.match(r'^\s*(status|verified_at|source_tier|label):\s*(.*)$',line)
+        # ⚠️ `impact` e `confidence` ENTRAM por defeito medido (juiz do radar E3, rodada 6,
+        # 2026-10-03): a saída imprimia `tier=` e NÃO imprimia os dois, e eu tratei três nós tier 9
+        # — DOIS com impact 2 e um com confidence 0,4 e auto-rótulo "informação próxima de zero" —
+        # como COBERTURA SELADA de seis versões do Claude Code, isentando-me de medi-las. O juiz
+        # provou a falha colhendo um item de dentro da janela que eu declarei coberta.
+        # A LIÇÃO QUE A COLUNA CARREGA: tier alto é qualidade da FONTE, nunca extensão da COBERTURA.
+        # Quem usa o corpus para decidir o que NÃO medir precisa ler o quanto ele mediu — e esta cura
+        # faz essa leitura acontecer por DEFAULT, em vez de depender de eu abrir o grafo.
+        km=re.match(r'^\s*(status|verified_at|source_tier|impact|confidence|label):\s*(.*)$',line)
         if km:
             k,v=km.group(1),km.group(2).strip().strip("'\"")
             node[k]=v
@@ -74,8 +139,32 @@ for f in files:
     if node and node.get("_hit"): hits.append(node)
 if not all_status: hits=[h for h in hits if h["status"] not in ("refuted","superseded")]
 for h in hits: h.pop("_hit",None)
-if json_out: print(json.dumps({"graphs":graphs,"terms":terms,"hits":hits},ensure_ascii=False,indent=1)); sys.exit(0)
-print(f"# corpus: {graphs} grafos · termos: {', '.join(terms)} · {len(hits)} nó(s)")
-for h in hits:
-    print(f"{h['grafo']}\t{h['id']}\t{h['status'] or '-'}\t{h['verified_at'] or '-'}\ttier={h['source_tier'] or '-'}\t{h['label'][:160]}")
+if json_out:
+    # ⚠️ `--json` com aviso em stderr QUEBRA quem captura `2>&1` (achado do Elenxo do PR #909): a
+    #    linha de aviso precede o `{` e o payload deixa de ser JSON valido. `2>&1` e a convencao da
+    #    casa nas diretivas injetadas, logo era armadilha armada. O aviso vai DENTRO do payload.
+    print(json.dumps({"graphs":graphs,"terms":terms,"mode":("phrase" if phrase else "terms"),"hits":hits},ensure_ascii=False,indent=1)); sys.exit(0)
+print(f"# corpus: {graphs} grafos · {'FRASE' if phrase else 'termos'}: {', '.join(terms)} · {len(hits)} nó(s)")
+# ⚠️ ZERO NAO E RESULTADO (a mesma clausula que o forge-census declara, 2026-10-03): um `0 no(s)`
+#    sobre corpus POPULADO quase nunca significa "o corpus nao sabe"; significa termo que nenhum
+#    `id` nem `label` contem. Deixar o zero nu convida a conclusao de que o tema e inedito — e foi
+#    exatamente o que aconteceu, com 120 grafos na mao.
+if not hits and graphs:
+    print(f"# ⚠️ ZERO sobre {graphs} grafos POPULADOS — zero NAO e resultado. O que checar, nesta ordem:")
+    print("#    1. termo casa `id` ou `label` por SUBSTRING (sem stemming): 'laco' casa 'relacoes'; 'raio-X' nao casa nada")
+    print("#    2. a busca e OR entre termos: um termo generico a mais AMPLIA, nunca restringe")
+    print("#    3. status `refuted`/`superseded` sao ocultos por default — repita com --all-status")
+    if phrase:
+        print("#    3b. MODO FRASE: o casamento e LITERAL — pontuacao, acento e ordem contam. Tente os termos soltos")
+    print("#    4. so entao conclua ausencia, e registre a LACUNA como no (nunca como silencio)")
+# o corte acontece AQUI, onde o total ainda e conhecido — e ele se declara ao final
+_shown = hits[:top] if top else hits
+for h in _shown:
+    print(f"{h['grafo']}\t{h['id']}\t{h['status'] or '-'}\t{h['verified_at'] or '-'}"
+          f"\ttier={h.get('source_tier') or '-'}\timp={h.get('impact') or '-'}"
+          f"\tconf={h.get('confidence') or '-'}\t{h['label'][:160]}")
+if top and len(hits) > top:
+    print(f"# ⚠️ LISTA CORTADA: {len(_shown)} de {len(hits)} nós acima (ordem do corpus, NAO por atenção).")
+    print(f"#    Os {len(hits) - len(_shown)} restantes NAO estão aqui e NAO são zero. Para o conjunto,")
+    print("#    repita sem --top; para estreitar de verdade, use termos mais específicos ou --phrase.")
 PY
