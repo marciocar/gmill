@@ -2470,6 +2470,33 @@ check_kg_read_index_sync() {
   fi
   rm -f "${gen_err}"
   if ! printf '%s\n' "${new_index}" | LC_ALL=C diff -q - "${idx}" >/dev/null 2>&1; then
+    # ⚠️ COMMIT COM PATHSPEC NÃO PODE SER JULGADO AQUI — sinal de campo de um adotante hub,
+    # 2026-10-02, com causa VERIFICADA por ele: `git commit -- <pathspec>` monta um índice
+    # TEMPORÁRIO só com os caminhos do pathspec. O hook roda o lint sob esse índice, e o
+    # `kg-trace-resolve.sh --emit-index` enumera o corpus por `git ls-files` — então todo `.kg.yaml`
+    # novo que ficou FORA do pathspec desaparece do corpus, o índice gerado fica menor que o
+    # commitado, e a regra acusa DEFASADO. Ele mediu 4 de 4 tentativas reprovando com pathspec e
+    # passando num commit único. O lint rodado à mão dava 0 HARD — ou seja, a guarda contradizia o
+    # lint sobre o MESMO repo, e a mensagem mandava "regenere", que é a ação ERRADA: regenerar sob
+    # índice parcial ENCURTARIA o índice bom.
+    # A cura é a cláusula 4 da doutrina de guardas: quando ela não pode julgar, DECLARA que não sabe
+    # — nunca acusa. E o idioma de detecção já existia neste repo, no auto-fix de plugins do
+    # `.githooks/pre-commit` ("commit por pathspec usa índice temporário"); o que faltava era este
+    # caminho usá-lo.
+    # ⚠️ TETO DECLARADO (F4 do Elenxo): esta isenção é mais LARGA que a causa medida. A causa é índice
+    # PARCIAL — o grafo novo desaparece, logo o índice gerado é SUBCONJUNTO do commitado. A isenção,
+    # porém, cobre QUALQUER divergência sob qualquer nome estranho de índice: o refutador provou, com
+    # índice temporário mas COMPLETO e um tsv genuinamente defasado, que o veredito muda só pelo NOME
+    # do arquivo de índice (HARD com índice real, isento com o temporário). Estreitar ao subconjunto
+    # estrito NÃO foi feito nesta leva — por isso a mensagem passou a DECLARAR que não verificou, em
+    # vez de afirmar que não há defeito. GATILHO: o próximo sinal de pathspec, ou a próxima leva que
+    # tocar esta regra.
+    case "${GIT_INDEX_FILE:-}" in
+      ""|*/index|*/index.lock) : ;;   # índice REAL do repo → o veredito vale
+      *)
+        violation "SOFT" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): [kg-read-index/PATHSPEC-NAO-JULGAVEL] commit com pathspec usa índice TEMPORÁRIO (GIT_INDEX_FILE=${GIT_INDEX_FILE}), e o gerador enumera o corpus por \`git ls-files\` — um \`.kg.yaml\` novo fora do pathspec desaparece e o índice PODE parecer defasado sem estar. ESTA GUARDA NÃO VERIFICOU se há defeito — ela declara que NÃO PODE JULGAR aqui, e isso NÃO é \"sem divergência\". NÃO regenere sob este índice (encurtaria o índice bom): faça um commit ÚNICO, sem pathspec, que é onde o veredito vale."
+        return ;;
+    esac
     violation "HARD" "docs/onion/kg-read-index.tsv" "REGRA 84 (Índice de leitura do KG em sincronia com os traces): índice DEFASADO vs os \`trace:\` do corpus — o hook de leitura está cego para os nós que faltam. Regenere: bash .claude/validation/kg-trace-resolve.sh . --emit-index > docs/onion/kg-read-index.tsv"
   fi
 }
@@ -2566,6 +2593,83 @@ check_kb_applies_to() {
         ;;
       *SEM-FRONTMATTER*|*SEM-CAMPO*)
         violation "HARD" "docs/knowledge-base" "REGRA 93 (KB de terceiro declara a QUE VERSÃO se aplica): ${line}"
+        ;;
+    esac
+  done <<< "${out}"
+}
+
+# ===========================================================================
+# REGRA 94 — MUTANTE esquecido na árvore [HARD]
+# previne: teste de mutação que morre no meio e deixa o repo PIOR que antes
+#   DANO CONSUMADO em 2026-10-01: um `exit 137` (SIGKILL do OOM killer) matou a sessão no meio
+#   de um teste de mutação e deixou um `git add` plantado dentro do `.githooks/pre-commit` — que
+#   era PRECISAMENTE o defeito que a guarda recém-escrita existia para pegar. A restauração era
+#   um `cp` DEPOIS do laço, e `cp` depois do laço só roda se o processo sobreviver.
+#   ⚠️ E `trap` NÃO RESOLVE: trap não intercepta SIGKILL. Um helper que confie só nele é cura
+#   falsa para o caso que de fato ocorreu. Por isso a defesa é em DUAS camadas, e esta é a que
+#   NÃO depende do processo sobreviver: todo mutante plantado por `ops/mutate-and-restore.sh`
+#   carrega um marcador (o helper RECUSA plantar sem ele), e o marcador na árvore significa uma
+#   coisa só — alguém mutou e não restaurou.
+#   SEM CATRACA e SEM BASELINE, de propósito: mutante esquecido não é passivo a tolerar com o
+#   tempo, é contaminação a remover agora. É a única classe desta casa que nasce HARD puro.
+# ===========================================================================
+check_mutant_leftover() {
+  local sut="${SCRIPT_DIR}/mutant-leftover-check.sh"
+  [ -x "${sut}" ] || return 0
+  local out rc=0
+  out="$(bash "${sut}" "${REPO_ROOT}" 2>&1)" || rc=$?
+  if [ "${rc}" = "3" ]; then
+    violation "SOFT" ".claude/validation/mutant-leftover-check.sh" "REGRA 94 (MUTANTE esquecido na árvore): a guarda não pôde julgar (rc=3) — sem git ou alvo ilegível. Recusa NÃO é aprovação: ${out}"
+    return 0
+  fi
+  [ -n "${out}" ] || return 0
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    violation "HARD" "${line#REGRA 94: }" "REGRA 94 (MUTANTE esquecido na árvore): ${line#REGRA 94: }"
+  done <<< "${out}"
+}
+
+
+# ===========================================================================
+# REGRA 95 — Anúncio que afirma ZERO sobre classe verificável sem medição [HARD + SOFT]
+# previne: o ÚNICO documento que chega ANTES do merge desligar a ação do adotante com um zero em prosa
+#   DANO CONSUMADO (2026-08-31, re-medido em 2026-09-16): um anúncio do core escreveu "As portas
+#   estão OK (nenhuma sem prefixo de bind)" enquanto a catraca da MESMA leva contava 38 exposições,
+#   o relatório dentro da branch dizia o número certo, e o PRÓPRIO anúncio citava "os 38 casos
+#   legados" doze linhas antes. Quem leu só o anúncio concluiu que não havia o que fazer, e a
+#   dívida tolerada ficou tolerada PARA SEMPRE porque ninguém foi avisado.
+#   POR QUE SÓ O ZERO: o mesmo anúncio errou um não-zero ("3 fallbacks" onde o padrão produzia 19
+#   em 10 variáveis) — e ISSO é indetectável por grep, que não sabe a contagem verdadeira. A
+#   assimetria que sobra é a que paga: um não-zero errado ainda PROVOCA ação; um zero desliga a
+#   ação inteira. A guarda cobra o zero e DECLARA que não cobre o resto.
+#   ESCOPO PROSPECTIVO: só anúncios de 1º nível em outbox/<id>/ — onde a cura ainda existe.
+#   `_processed/` já viajou e história não se reescreve. Medido 2026-10-01: 0 em 1º nível, logo
+#   nasce SEM-OBJETO (que é DECLARAÇÃO, não conformidade) e morde o próximo anúncio.
+#   A UNIDADE É A FRASE: a 1ª versão casava linha a linha e NÃO pegou o próprio dano que a
+#   motivou, porque o wrap do markdown parte a afirmação em duas linhas. Toda a lógica vive em
+#   announce-zero-claim-check.sh + .py.
+# ===========================================================================
+check_announce_zero_claim() {
+  local sut="${SCRIPT_DIR}/announce-zero-claim-check.sh"
+  [ -x "${sut}" ] || return 0
+  # CORE-ONLY: o outbox da federação é deste repo; exigi-lo do adotante o faria nascer vermelho
+  # num diretório que não é dele (mesma razão das REGRAS 80/81).
+  [ "${IS_DERIVED}" -eq 1 ] && return 0
+  local out rc=0
+  out="$(bash "${sut}" "${REPO_ROOT}" 2>&1)" || rc=$?
+  if [ "${rc}" = "3" ]; then
+    violation "SOFT" ".claude/validation/announce-zero-claim-check.sh" "REGRA 95 (Anúncio que afirma ZERO sobre classe verificável sem medição): a guarda não pôde julgar (rc=3) — sem git ou sem python3. Recusa NÃO é aprovação: ${out}"
+    return 0
+  fi
+  [ -n "${out}" ] || return 0
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    case "${line}" in
+      *'[anuncio-zero/SEM-OBJETO]'*)
+        violation "SOFT" "docs/evolution/federation/outbox" "REGRA 95 (Anúncio que afirma ZERO sobre classe verificável sem medição): ${line#REGRA 95: }"
+        ;;
+      *)
+        violation "HARD" "${line#REGRA 95: }" "REGRA 95 (Anúncio que afirma ZERO sobre classe verificável sem medição): ${line#REGRA 95: }"
         ;;
     esac
   done <<< "${out}"
@@ -3338,8 +3442,36 @@ _scan_relative_links() {
   # door, exatamente como os docs core-only. Só ATIVA quando o alvo está ausente ([ ! -e ] abaixo): num
   # adotante-cheio o alvo existe (nunca entra); no core (role: source) o guard nem roda. Backward-safe.
   local adopted=""; [ "${IS_DERIVED}" -eq 1 ] && adopted=1
-  local f dir lineno target clean rel
+  local f dir lineno target clean rel _rel_f
   while IFS= read -r -d '' f; do
+    # ⚠️ INTAKE NÃO-CONFIÁVEL NÃO É DOC DESTA CASA — e isto nasceu de dano medido em 2026-10-02.
+    # Um sinal de 2818 linhas chegou ao `inbox/` de um adotante trazendo um PATCH, com links
+    # relativos escritos da perspectiva do arquivo ALVO (`../interface.md`, `./types.md`). Eles não
+    # resolvem de `docs/evolution/inbox/` — e a regra, sendo HARD, deixou o gate do CORE vermelho
+    # por conteúdo que o core não escreveu e não deve editar.
+    # Consequência que torna isto buraco e não inconveniência: QUALQUER adotante passa a poder
+    # travar o gate do core só mandando um sinal. Guarda que terceiro consegue disparar à distância
+    # é superfície, não proteção.
+    # ESCOPO: pula o 1º nível de `inbox/` e `inbound/` (a chegada). `_processed/` CONTINUA julgado —
+    # ali o core já triou, o conteúdo virou registro desta casa, e link quebrado volta a ser dívida
+    # nossa. É a mesma fronteira que o R15.2 usa: o corpo do sinal é DADO até ser absorvido.
+    # A ISENÇÃO É POR PROCEDÊNCIA, NÃO POR PASTA — correção de Elenxo, 2026-10-02. A 1ª versão
+    # isentava `inbox/` e `inbound/` em QUALQUER repo, e isso inverte o sentido no adotante:
+    # `/meta:co-relay` diz, literalmente, que `inbox/` é "um sinal que O ADOTANTE ESCREVEU". Logo no
+    # core `inbox/` é chegada de terceiro (isentar é certo) e no adotante é produção PRÓPRIA —
+    # isentá-la lá desliga a guarda nos docs dele. O espelho vale para `inbound/`: no adotante é
+    # chegada do core (isentar), no core nem existe.
+    # `_processed/` SEMPRE julga: ali o conteúdo já foi triado e virou registro da casa.
+    _rel_f="${f#"${REPO_ROOT}/"}"
+    case "${_rel_f}" in
+      docs/evolution/inbox/*/*|docs/evolution/inbound/*/*) : ;;   # subpasta (_processed/) → JULGA
+      docs/evolution/inbox/*)
+        # chegada de terceiro SÓ no core (IS_DERIVED=0); no adotante é autoria dele → julga
+        [ "${IS_DERIVED}" -eq 0 ] && continue ;;
+      docs/evolution/inbound/*)
+        # chegada do core SÓ no adotante (IS_DERIVED=1); o core não tem este canal
+        [ "${IS_DERIVED}" -eq 1 ] && continue ;;
+    esac
     dir="$(dirname "${f}")"
     while IFS=$'\t' read -r lineno target; do
       [ -n "${target}" ] || continue
@@ -4572,6 +4704,8 @@ check_kg_edit_saw_confirmed
 check_door_staleness
 check_door_role_parity
 check_kb_applies_to
+check_mutant_leftover
+check_announce_zero_claim
 check_workflows_parse
 check_workflow_job_needs_checkout
 check_frontmatter_scalar_colon
@@ -5258,6 +5392,131 @@ check_kg_yaml_validity
 check_kg_census_parity
 check_marketplace_root_sync
 check_plugin_deps_contract
+
+# REGRA 96 — Diretiva de contexto INJETADO não corta listagem em silêncio [HARD]
+# previne: a projeção que o harness injeta é lida pela sessão COMO SE FOSSE o conjunto — não há
+#   rolagem nem "ver mais". Um `| head -N` ali não é formatação: é uma afirmação implícita de
+#   completude, e ela é falsa.
+#   DANO CONSUMADO (2026-10-03, três sítios, um pago em afirmação falsa SELADA): `meta/forge.md`
+#   injetava uma projeção que cortava 12 de 59 candidatos em silêncio; uma sessão leu a projeção,
+#   não viu o `/meta:evolve` nela, e selou numa migalha que ele tinha "0 de 7 peças, ausente do
+#   censo inteiro" — o `--tsv` dizia 2/7, com 37 candidatos ABAIXO dele. `onion-research/SKILL.md`
+#   injetava 40 de 298 achados do corpus. `meta/kg.md` prometia "FILA COMPLETA / CORPUS INTEIRO"
+#   antes de um `head -20` sobre ~312 abertos. Os três curados; o selo para guardar a CLASSE veio
+#   em 2026-10-04, depois do passivo ser MEDIDO EM ZERO — guarda que nasce em zero não tolera
+#   dívida: o próximo corte entra reprovando em vez de entrar num baseline.
+#   Toda a lógica (e o teto declarado) vive em injected-cut-check.sh.
+check_injected_cut_declares() {
+  local helper="${SCRIPT_DIR}/injected-cut-check.sh"
+  [ -f "${helper}" ] || return 0
+  if [ -n "${ONLY_PATH}" ]; then
+    case "${ONLY_PATH}" in
+      */lint-artifacts.sh|*/injected-cut-check.sh|*/.claude/commands/*|*/.claude/skills/*) : ;;
+      *) return 0 ;;
+    esac
+  fi
+  local line
+  # ⚠️ UMA INVOCACAO SO, capturando saida E rc: a 1a versao do fail-loud rodava o helper DUAS
+  #    vezes, e o segundo par (`--tsv >/dev/null 2>&1`) virou um MODO-SEM-TESTE pela REGRA 59
+  #    (Modo que a producao consome e exercitado pela bancada) — o extrator leu `[--tsv e]`. Alem
+  #    de contornar a regra, invocar duas vezes era trabalho dobrado. O fail-loud le o rc DESTA
+  #    chamada, que e a mesma que a bancada exercita.
+  local _out _hrc=0
+  _out="$(bash "${helper}" "${REPO_ROOT}" --tsv 2>/dev/null)" || _hrc=$?
+  while IFS=$'\t' read -r _sev _code _path _msg; do
+    [ -n "${_path:-}" ] || continue
+    violation "${_sev:-SOFT}" "${_path}" "REGRA 96 (Diretiva de contexto INJETADO não corta listagem em silêncio): ${_msg}"
+  done <<< "${_out}"
+  # o helper saiu >=2 ⇒ ele DECLAROU que nao pode julgar. Zero achados nao e conformidade.
+  # ⚠️ A MENSAGEM NAO ESCREVE `bash <caminho> --tsv`, e a razao e medida: a REGRA 59 extrai pares
+  #    (script, flags) de QUALQUER linha com `bash .../x.sh`, inclusive de dentro de uma STRING de
+  #    mensagem — ela leu `--tsv' e leia` como as flags `[--tsv e]` e acusou MODO-SEM-TESTE sobre
+  #    um par que nunca existiu. E a MESMA classe do falso positivo fatal da REGRA 96 descoberto
+  #    hoje: documentacao indistinguivel de invocacao viva. Aqui o lado curavel e meu: a mensagem
+  #    descreve o comando em vez de escreve-lo.
+  if [ "${_hrc}" -ge 2 ]; then
+    violation "HARD" ".claude/validation/injected-cut-check.sh" "o helper desta regra saiu ${_hrc} (fail-loud: nao pode julgar) e o dispatcher nao pode ler isso como conformidade — invoque o helper no modo que a producao usa e leia o stderr dele (o caminho e .claude/validation/injected-cut-check.sh)"
+  fi
+}
+check_injected_cut_declares
+
+# REGRA 97 — A auto-auditoria do framework tem GATILHO [SOFT]
+# previne: o órgão de auto-evolução ficar parado sem ninguém ser avisado. DANO MEDIDO (2026-10-04):
+#   o `/meta:evolve` estava há 66 dias sem rodar, e era o ÚNICO dos órgãos sem gatilho — o radar
+#   tem a REGRA 65, o `/meta:dissect` tem censo de nível vencido, o `/meta:kg` tem a REGRA 67, e o
+#   evolve nada, num repo chamado Onion Evolve. O corpus já media a causa com impact 5
+#   (`C_TESE_AUTO_EVOLUCAO`): "estamos à frente no PRODUTO do laço e atrás no GATILHO dele".
+#   Uma rodada anterior atribuiu os dias parados a outra causa e o refutador a derrubou por
+#   não-sequitur: faltava o gatilho, não o barateamento.
+# ⚠️ DUAS PERNAS, e a segunda é a que a idade sozinha não dá: (1) IDADE do relatório que o próprio
+#   evolve produz; (2) DELTA POPULACIONAL desde ele, medido no GIT. Relatório de ontem com 30
+#   artefatos novos está vencido na SUBSTÂNCIA, não no calendário. Nenhuma das duas lê um campo
+#   digitado — é `behavior-over-declaration` aplicado ao gatilho, e corta o carimbo-sem-medição
+#   pela raiz: não há `last_run:` para ficar desatualizado.
+# Padrão da REGRA 62/65: a máquina DETECTA, o humano DISPARA. SOFT por desenho — auto-auditoria
+#   vencida é aviso, não bloqueio de merge. Toda a lógica e o teto vivem em evolve-staleness-check.sh.
+check_evolve_staleness() {
+  local helper="${SCRIPT_DIR}/evolve-staleness-check.sh"
+  [ -f "${helper}" ] || return 0
+  if [ -n "${ONLY_PATH}" ]; then
+    case "${ONLY_PATH}" in
+      # as CINCO familias que a perna (2) vigia, nao tres: um PR que tocasse so .claude/hooks/ ou
+      # .claude/validation/ nao re-disparava a regra (achado do Elenxo, FN-7).
+      */lint-artifacts.sh|*/evolve-staleness-check.sh|*/docs/analysis/*|*/.claude/commands/*|*/.claude/agents/*|*/.claude/skills/*|*/.claude/hooks/*|*/.claude/validation/*) : ;;
+      *) return 0 ;;
+    esac
+  fi
+  # ⚠️ UMA INVOCACAO SO, capturando saida E rc: a 1a versao do fail-loud rodava o helper DUAS
+  #    vezes, e o segundo par (`--tsv >/dev/null 2>&1`) virou um MODO-SEM-TESTE pela REGRA 59
+  #    (Modo que a producao consome e exercitado pela bancada) — o extrator leu `[--tsv e]`. Alem
+  #    de contornar a regra, invocar duas vezes era trabalho dobrado. O fail-loud le o rc DESTA
+  #    chamada, que e a mesma que a bancada exercita.
+  local _out _hrc=0
+  _out="$(bash "${helper}" "${REPO_ROOT}" --tsv 2>/dev/null)" || _hrc=$?
+  while IFS=$'\t' read -r _sev _code _path _msg; do
+    [ -n "${_path:-}" ] || continue
+    violation "${_sev:-SOFT}" "${_path}" "REGRA 97 (A auto-auditoria do framework tem GATILHO): ${_msg}"
+  done <<< "${_out}"
+  # o helper saiu >=2 ⇒ ele DECLAROU que nao pode julgar. Zero achados nao e conformidade.
+  if [ "${_hrc}" -ge 2 ]; then
+    violation "HARD" ".claude/validation/evolve-staleness-check.sh" "o helper desta regra saiu ${_hrc} (fail-loud: nao pode julgar) e o dispatcher nao pode ler isso como conformidade — invoque o helper no modo que a producao usa e leia o stderr dele (o caminho e .claude/validation/evolve-staleness-check.sh)"
+  fi
+}
+check_evolve_staleness
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGRA 98 (Diretiva de injeção escrita como CITAÇÃO não pode estar VIVA) — HARD
+#   DANO CONSUMADO (2026-10-04, rodada do /meta:evolve): o /meta:create-skill EXECUTAVA git diff
+#   a cada invocação, porque dois exemplos de documentação (crase dupla; bloco cercado) casam as
+#   regex do harness 2.1.289 — que NÃO pula bloco cercado e NÃO mascara crase dupla. Era a 2ª
+#   instância no dia (o /meta:forge-guard nasceu morto na carga pelo mesmo mecanismo). A REGRA 96
+#   chamava exatamente essas formas de "citadas"; esta regra simula a leitura do harness e acusa
+#   onde as duas leituras divergem. Passivo medido em ZERO após a leva 1: nasce sem catraca.
+#   Toda a lógica (e o teto declarado) vive em cited-directive-check.sh.
+check_cited_directive_live() {
+  local helper="${SCRIPT_DIR}/cited-directive-check.sh"
+  [ -f "${helper}" ] || return 0
+  if [ -n "${ONLY_PATH}" ]; then
+    case "${ONLY_PATH}" in
+      */lint-artifacts.sh|*/cited-directive-check.sh|*/.claude/commands/*|*/.claude/skills/*|*/plugins/*) : ;;
+      *) return 0 ;;
+    esac
+  fi
+  local _out _hrc=0
+  _out="$(bash "${helper}" "${REPO_ROOT}" --tsv 2>/dev/null)" || _hrc=$?
+  while IFS=$'\t' read -r _sev _code _path _msg; do
+    [ -n "${_path:-}" ] || continue
+    violation "${_sev:-SOFT}" "${_path}" "REGRA 98 (Diretiva de injeção escrita como CITAÇÃO não pode estar VIVA): ${_msg}"
+  done <<< "${_out}"
+  # helper >=2 ⇒ declarou que NAO pode julgar; zero achados nao e conformidade. A mensagem
+  # DESCREVE o comando em vez de escreve-lo (REGRA 59 le string de mensagem como invocacao).
+  # ⚠️ rc!=0 SEM nenhuma linha TSV também é "não pude julgar" (F6 do Elenxo): o helper que morre sob
+  #    `set -e` sai 1 calado, e o rc=1 legítimo SEMPRE traz linha. Escalar só rc>=2 aprovava a queda.
+  if [ "${_hrc}" -ge 2 ] || { [ "${_hrc}" -ne 0 ] && [ -z "${_out}" ]; }; then
+    violation "HARD" ".claude/validation/cited-directive-check.sh" "o helper desta regra saiu ${_hrc} (fail-loud: nao pode julgar) — invoque o helper no modo que a producao usa e leia o stderr dele (o caminho e .claude/validation/cited-directive-check.sh)"
+  fi
+}
+check_cited_directive_live
 
 # ===========================================================================
 # SUMÁRIO FINAL

@@ -8,9 +8,9 @@ description: |
   mais a memória de sessão em D10, exceção declarada fora do repo.
 category: meta
 tags: [evolve, audit, orchestration, self-evolution, modernization]
-version: "1.4.0"
-updated: "2026-08-05"
-allowed-tools: Read Write Grep Glob Bash(bash .claude/validation/*) Bash(find *) Bash(wc *) Bash(ls *) Bash(git log*) Bash(git ls-files*)
+version: "2.0.0"
+updated: "2026-10-04"
+allowed-tools: Read Write Grep Glob Workflow Agent Skill Bash(bash .claude/validation/*) Bash(find *) Bash(wc *) Bash(ls *) Bash(git log*) Bash(git ls-files*)
 argument-hint: "[dimensão específica (D1..D10) | vazio = auditoria completa]"
 related_commands:
   - /meta:orchestrate
@@ -24,6 +24,33 @@ related_agents:
 ---
 
 # /meta:evolve — Auto-Auditoria e Backlog de Evolução
+
+## 🧬 O laço, e as peças que o compõem
+
+Re-forjado em 2026-10-04 pelo `/meta:forge` (estava em **2/7** peças; a doutrina dele vivia numa KB
+que nenhum outro comando conseguia citar). A doutrina inteira — a cláusula-mãe, as seis cláusulas e
+o que ela **não** promete — está em [`common:prompts:evolve-doctrine`](../common/prompts/evolve-doctrine.md).
+**Referencie, não copie.**
+
+| peça | onde |
+|---|---|
+| 2 doutrina | [`common/prompts/evolve-doctrine.md`](../common/prompts/evolve-doctrine.md) |
+| 3 contexto injetado | `.claude/validation/evolve-census.sh` — o raio-X, injetado abaixo |
+| gatilho | REGRA 97 (A auto-auditoria do framework tem GATILHO) — `.claude/validation/evolve-staleness-check.sh` |
+| 4 orquestração | `.claude/workflows/evolve.js` — o fan-out (D1 D2 D3 D6 D7 D8 + MAQ) com JSON Schema real e refutador por achado |
+| 5 destino | o `.kg.yaml` de auditoria + `kg-radar` exit 0 + o contrato de custo (Passo 4) |
+| 6 lente | `.claude/rules/evolve-lens.md` |
+| 7 bancada | `run_evolve_census_selftests` |
+
+## Contexto medido injetado (peça 3 — o raio-X roda ANTES de você pensar)
+
+!`bash .claude/validation/evolve-census.sh . --markdown`
+
+Leia o raio-X **como ele se declara**: ele compõe seis medidores (peças, guardas, dissecações,
+doutrina que carrega, plano, idade desta própria auditoria) e mede o que eles **declaram** — não
+julga qualidade e não prioriza. O valor do evolve é o **confronto** entre as seções, que nenhum
+órgão isolado entrega. E a seção 4 mede se a doutrina **carregou**, nunca se **aterrissou**:
+achado sobre doutrina diz qual das duas coisas mediu.
 
 ## 🎯 Objetivo
 
@@ -81,7 +108,7 @@ existentes, **não** reimplementam (e não aninham orquestração dentro de orqu
 | D6 | **Moderna vs legada + vazamento SDAAL** | Prosa/delegação sequencial que deveria ser `Workflow` fan-out; resíduo `.onion`/CLI/npm/multi-IDE ([architecture.md §7](../../../docs/meta-specs/architecture.md)). **Vazamento provider-specific / MCP-first:** chamada direta a provider (`mcp_<provider>_*`) ou "MCP como transporte default" em comandos/agentes fora de adapters/especialistas — viola API-first/agnosticismo (lint Regra 10; doutrina §consumo de integração). | sonnet |
 | D7 | **Cross-refs / links** | `find .claude -xtype l` (symlinks quebrados) + links relativos `[..](..)` que apontam para arquivos inexistentes. | haiku |
 | D8 | **Plataforma/frontmatter + inventário** | Cobertura de `allowed-tools`/`model:`, frontmatter completo, kebab-case ([commands.md §1](../../../docs/meta-specs/commands.md), [agents.md](../../../docs/meta-specs/agents.md)). **Inventário:** roda `bash .claude/validation/inventory.sh --markdown` e compara com `docs/onion/inventory.md` + contagens em `CLAUDE.md`; divergência = achado (atuador `/meta:inventory`, **não** edição manual — ver doutrina §regra de inventário). | haiku |
-| D9 | **Frescor de contexto de domínio** | **DELEGA a `/meta:context-freshness`** — ingere `FreshnessSchema[]` dos `docs/*-context/`. Herda o threshold ≤18mo (item 1 da régua de contexto). No framework = **no-op** (contextos são templates, só README); o valor é em projeto-alvo que populou os contextos. Não reimplementar; não aninhar orquestração. | (context-freshness) |
+| D9 | **Frescor de contexto de domínio** | **DELEGA a `/meta:context-freshness`** — ingere `FreshnessSchema[]` dos `docs/*-context/`. Herda o threshold ≤18mo (item 1 da régua de contexto). ~~No framework = **no-op** (contextos são templates, só README)~~ — **FALSO, medido 2026-10-04**: o core tem `business-context` com 15 arquivos rastreados e `technical-context` com 9 e `design-context` com 7 (recursivo, `git ls-files`), populados. O D9 **roda aqui também**; vazio silencioso é falha, não no-op. Não reimplementar; não aninhar orquestração. | (context-freshness) |
 | D10 | **Frescor da memória de sessão** | **CONTEXTO PRINCIPAL, não worker** (a memória `~/.claude/projects/<projeto>/memory/` é da sessão que roda o evolve; subagente não a enxerga). Para cada entrada do `MEMORY.md`: **1 teste barato de validade** conforme a classe de apodrecimento — estado-de-trabalho (`git log`/`ls` no artefato resolutor), preferência-do-maestro (**não expira sozinha** — só o maestro invalida). **Fato-de-ambiente** (exigiria `command -v`/`curl`) está **fora do `allowed-tools` por desenho**: devolva `UNVERIFIABLE` nomeando o comando que faltou, nunca um veredito adivinhado — carimbar sem medir é exatamente o que esta dimensão existe para impedir. Corrigir/apagar na hora; nunca re-carimbar sem re-testar. Carimbar a varredura no índice (`última varredura: <data>, N rot em M`). **No-op gracioso** se a sessão não tem memória. Reporta ao relatório só contagens/vereditos (privacidade — nunca colar conteúdo de memória). Doutrina: [session-memory-lifecycle.md](../../../docs/knowledge-base/concepts/session-memory-lifecycle.md). | (principal) |
 
 ## ⚡ Etapas de Execução
@@ -89,6 +116,18 @@ existentes, **não** reimplementam (e não aninham orquestração dentro de orqu
 ### Passo 0 — Health-check do substrato Workflow
 Confirme a ferramenta nativa **Workflow**. Se ausente → **fallback serial**
 (Passo 5) com aviso em pt-BR. Determinístico, não inferido.
+
+### Passo 0.5 — Ler o raio-X e escolher onde gastar
+
+A **seção 7 do raio-X** (CONFRONTO) nomeia os alvos: a doutrina com `paths:` que nunca casou, os
+comandos só-superfície que uma guarda já vigia, e — nas seções 2 e 3 — o passivo de guardas e as
+dissecações vencidas. **O dogfood é por censo, não por varredura** (cláusula 2 da doutrina): com
+argumento vazio, comece pelos alvos nomeados ali; varrer `.claude/` inteiro (o Passo 1 abaixo) é a
+exceção declarada, não o padrão.
+
+> ⚠️ A 1ª redação deste passo prometia que o raio-X "aponta os alvos" quando ele só os CONTAVA —
+> prosa prometendo o que o código não fazia, apontado pelo Elenxo da re-forja. O raio-X ganhou a
+> seção 7 para a promessa virar verdade, em vez de a promessa ser apagada.
 
 ### Passo 1 — Escopo
 - `$ARGUMENTS` preenchido com `D1..D10` → roda só aquela dimensão.
@@ -99,57 +138,45 @@ Acione **`onion-orchestration`** com: tarefa = "auditar o Onion em 10 dimensões
 independentes"; independência = alta (cada dimensão é autônoma); padrão esperado
 = **fan-out-and-synthesize**. A skill confirma elegibilidade e tiering.
 
-### Passo 3 — Fan-out (workers de dimensão) + composição (D4/D5/D9/D10)
-Autore o script `Workflow`. Cada worker de dimensão recebe a régua da sua linha e
-devolve `FindingSchema[]`. **D4, D5, D9 e D10 NÃO são workers** — D4/D5/D9 são
-chamados no fluxo principal (sequencialmente) e seus resultados mesclados, pois
-`kb-freshness` já roda sua própria orquestração interna (aninhar violaria
-`onion-orchestration`); **D10 roda no contexto principal por necessidade** — a
-memória de sessão só é visível à sessão que executa o evolve (subagente não a
-enxerga), e seus achados entram como `FindingSchema[]` com contagens/vereditos,
-nunca conteúdo de memória.
+### Passo 2.5 — Composição no CONTEXTO PRINCIPAL (D4, D5, D9, D10), antes do fan-out
+
+D4/D5/D9 são comandos com orquestração própria; invocá-los de dentro do workflow seria orquestração
+aninhada. D10 só existe no contexto principal (subagente não enxerga a memória de sessão). Por isso
+rodam **aqui**, um por vez (via `Skill`), e os achados entram à mão no fan-in no formato do schema
+`FINDINGS` de `.claude/workflows/evolve.js`:
+
+| dim | como | o que entra |
+|---|---|---|
+| D4 | invoque `/meta:kb-freshness` | KBs além do gate ≤18 meses |
+| D5 | invoque `/meta:metaspec-validate` nos artefatos de alto risco | vereditos estruturados |
+| D9 | invoque `/meta:context-freshness` (os `docs/*-context/` do core são POPULADOS) | `FreshnessSchema[]` |
+| D10 | 1 teste barato por entrada do `MEMORY.md` (régua na tabela de dimensões) | só contagens/vereditos |
+
+Dimensão que não rodou é **lacuna declarada** no relatório, nunca zero. Zero achados só vale com o
+comando executado e a saída que o sustenta.
+
+### Passo 3 — Fan-out (peça 4: `.claude/workflows/evolve.js`)
 
 ```javascript
-const FindingSchema = {
-  id: "string",                      // chave ESTÁVEL de correlação — atribuída no fan-in (`${dimension}-${ordinal}`)
-  dimension: "D1|D2|D3|D4|D5|D6|D7|D8|D9|D10",
-  severity: "blocker|recommended|opportunistic",   // 🔴 | 🟡 | 🟢
-  finding: "string",                 // descrição
-  evidence: "string",                // arquivo:linha ou output
-  doctrine_pattern: "string",        // regra da onion-modernization-doctrine
-  target_artifact: "string",         // arquivo(s)-alvo
-  effort: "S|M|L",
-  exec_command: "string"             // comando atuador: /meta:create-* | /product:spec→/engineer:plan
-};
-
-// Dimensões "scan próprio" → fan-out com barrier
-const SCAN_DIMS = ["D1","D2","D3","D6","D7","D8"];
-const scanFindings = await parallel(
-  SCAN_DIMS.map((d) => agent(
-    `Audite o Sistema Onion na dimensão ${d} (ver régua). Liste achados como FindingSchema[] com evidência arquivo:linha.`,
-    { schema: { type: "array", items: FindingSchema }, model: d === "D2" || d === "D6" ? "sonnet" : "haiku" }
-  ))
-);
-
-// ⚠️ COMPOSIÇÃO — NÃO IMPLEMENTADA (medido 2026-08-05). `runCommand()` NÃO existe: aparece
-// apenas nestas linhas, em todo o repo, e NENHUM artefato de .claude/ declara a tool
-// `SlashCommand` (grep -rl em commands/agents/skills = vazio). Logo D4/D5/D9 NUNCA rodaram
-// por este caminho — não é regressão, é mecanismo que nunca nasceu. O run de 2026-07-30
-// registra o sintoma: "a 1ª rodada falhou (schema bug) e o '0 findings' era FALSO".
-// Até o conserto (PR 3), execute D4/D5 como INVOCAÇÃO no contexto principal, antes do
-// fan-out, e mescle os resultados à mão — e DECLARE no relatório que foram assim obtidos.
-// Zero achados numa destas dimensões só é resultado válido se vier com o comando executado
-// e o output verbatim que sustenta o zero.
-const kbFindings = await runCommand("/meta:kb-freshness");         // D4 — ingere FreshnessSchema[]
-const specFindings = await runCommand("/meta:metaspec-validate");  // D5 — por artefato de alto risco
-const ctxFindings = await runCommand("/meta:context-freshness");   // D9 — FreshnessSchema[] dos docs/*-context/ (vazio no framework)
-const memFindings = sweepSessionMemory();                          // D10 — CONTEXTO PRINCIPAL: 1 teste/entrada do MEMORY.md; só contagens/vereditos (no-op sem memória)
-
-// Atribuir id ESTÁVEL a cada achado — é a única chave confiável de correlação
-// entre achado e veredito no fan-in (o juiz reformula o texto; o id não muda).
-const allFindings = [...scanFindings.flat(), ...kbFindings, ...specFindings, ...ctxFindings, ...memFindings]
-  .map((f, i) => ({ ...f, id: `${f.dimension}-${i}` }));
+Workflow({ scriptPath: '.claude/workflows/evolve.js',
+  args: { dims: [],               // vazio = D1 D2 D3 D6 D7 D8 MAQ; ou ex. ['D1'] para uma só
+          maqTargets: '<cole a seção 7 do raio-X>',   // sem isto a MAQ NÃO roda (nunca inventa alvo)
+          cap: 8 } })             // achados por dimensão; o excedente sai em total_seen (corte declarado)
 ```
+
+O script carrega os schemas reais (`FINDINGS`, `VERDICT`), atribui o `id` estável
+(`<dim>-<ordinal>`) e passa todo achado `blocker`/`recommended` por um refutador `opus/high` — em
+pipeline, sem barreira. Devolve `dims` (vistos × devolvidos, por dimensão), `skipped` (não pedida
+ou sem alvo), **`lost`** (o worker lançou: lacuna, nunca zero), `survived`, **`unjudged`** (o juiz
+devolveu nulo ou falhou: vai ao grafo como **não julgado**, nunca como sobrevivente), `refuted` e
+`verdicts`. Entrada ruim (`args` que não é objeto nem JSON, `cap` fora de 1..30, dimensão D4/D5/D9/D10)
+**recusa** com `{error}` — nunca roda tudo em silêncio.
+
+> ⚠️ **Até 2026-10-04 este passo era um bloco de JS que não rodava:** o `FindingSchema` não era JSON
+> Schema (`{id:"string"}` usado como `items:`, a forma ligada ao "0 findings FALSO" de 2026-07-30), e
+> `runCommand()` ×3 e `sweepSessionMemory()` não existiam em lugar nenhum — quem copiasse o molde
+> recebia ReferenceError. A rodada de 2026-10-04 autorou o script inline com schema real; ele virou a
+> peça 4 (nós `C_FINDINGSCHEMA_DO_EVOLVE_NAO_E_JSON_SCHEMA` e `C_QUATRO_SIMBOLOS_FANTASMAS_NO_EVOLVE`).
 
 ### Passo 3.1 — Verificação adversarial (acionada automaticamente quando)
 - proposta toca arquivo `engineer/*` ou `product/*` (risco de invariante);
@@ -160,30 +187,25 @@ Um juiz (opus) tenta **refutar** o achado e, sobretudo, **veta qualquer proposta
 que funda fases de workflow faseado** ([commands.md §3](../../../docs/meta-specs/commands.md)) —
 falha de modo mais grave. Achados que sobrevivem entram no backlog.
 
-O veredito **DEVE ecoar o `id`** do achado (jamais reproduzir o texto como chave):
+A correlação achado↔veredito é **por construção** no `evolve.js`: o refutador recebe UM achado e o
+script grava `{ id, verdict }` ao lado — o juiz nunca precisa ecoar texto nem id. O schema do
+veredito é o `VERDICT` do script (`refuted`, `vetoed_phase_merge`, `reasoning`, todos obrigatórios).
+Na prática o script julga **todo** achado `blocker`/`recommended` **e** todo achado — de qualquer
+severidade — cujo alvo, proposta ou texto toque `engineer/`, `product/`, fusão ou consolidação. Os
+achados do Passo 2.5 **não** passam por juiz e o relatório diz isso. (A 1ª versão julgava só por
+severidade, e um `opportunistic` que propusesse fundir fases escapava do veto — achado do Elenxo.)
 
-```javascript
-const VerdictSchema = {
-  finding_id: "string",        // ECOA FindingSchema.id — única chave de correlação válida
-  refuted: "boolean",
-  vetoed_phase_merge: "boolean",
-  reasoning: "string"
-};
-```
-
-### Passo 3.2 — Completeness critic (loop-until-done, budget-gated)
-Antes do fan-in, um crítico confirma que as 10 dimensões rodaram e nenhuma
-categoria de artefato foi pulada (incl. D9 — ausência de achados de contexto só é
-válida se os `docs/*-context/` forem templates; em projeto-alvo populado, vazio
-silencioso = falha, não sucesso). O que faltar vira nova rodada.
+### Passo 3.2 — Completeness critic (no contexto principal, sobre o retorno)
+Não é um agente: é a conferência que **você** faz antes do fan-in, sobre o que o script devolveu.
+As 10 dimensões têm de aparecer em exatamente um lugar — `dims` (rodou), `skipped`, `lost`, ou o
+Passo 2.5 (rodou ou lacuna declarada). `lost` e `unjudged` não-vazios vão para o relatório **e** para
+o grafo. Vazio silencioso numa dimensão é falha, não sucesso — vale também para o D9 no core, cujos
+contextos são populados.
 
 ### Passo 4 — Fan-in: consolidar e priorizar (0 tokens)
-No contexto principal, parta de `allFindings` (já com `id` estável):
-1. **Remova refutados/vetados correlacionando por `id`** — **nunca** por texto:
-   ```javascript
-   const survived = allFindings.filter(f =>
-     !verdicts.some(v => v.finding_id === f.id && (v.refuted || v.vetoed_phase_merge)));
-   ```
+No contexto principal, parta do `survived` que o workflow devolve **mais** os achados do Passo 2.5:
+1. **Refutados/vetados já saíram por `id`** dentro do script — **nunca** por texto. Os achados do
+   Passo 2.5 não passaram por refutador: marque-os assim no grafo.
    ⚠️ Casar por `finding.slice(...)` falha: o juiz reformula o texto do achado e a
    maioria dos refutados escaparia para o backlog (modo de falha real, jun/2026).
 2. Agrupe por severidade: 🔴 blocker → 🟡 recommended → 🟢 opportunistic
@@ -199,8 +221,9 @@ No contexto principal, parta de `allFindings` (já com `id` estável):
    `.claude/`).
 
 ### Passo 5 — Fallback serial (Workflow indisponível)
-Avise em pt-BR; itere as dimensões com `Agent` uma a uma com o mesmo
-`FindingSchema`; consolide igual ao Passo 4. Nunca finja paralelismo.
+Avise em pt-BR; itere as dimensões com `Agent` uma a uma com os mesmos
+prompts do `.claude/workflows/evolve.js`, pedindo a saída no formato do schema `FINDINGS` (o `Agent`
+não recebe schema: valide a forma ao receber); consolide igual ao Passo 4. Nunca finja paralelismo.
 
 ## 📤 Saída — `docs/analysis/onion-evolution-<data>.md`
 
@@ -219,7 +242,8 @@ Avise em pt-BR; itere as dimensões com `Agent` uma a uma com o mesmo
 ## 2. Achados por dimensão (D1–D10)
 ## 3. Alertas transversais (causa sistêmica)
 ## 4. Invariantes respeitadas
-   - Nenhuma proposta funde fases de engineer/* ou product/* (verificado pelo juiz adversarial).
+   - Nenhuma proposta funde fases de engineer/* ou product/* (verificado pelo juiz adversarial nos achados
+     do workflow; os do Passo 2.5 e os `unjudged` NÃO foram julgados, e o relatório os nomeia).
 ## 5. Próximos passos (cada item → seu comando atuador)
 ```
 
