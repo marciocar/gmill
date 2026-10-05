@@ -4313,6 +4313,50 @@ run_durable_commit_selftests() {
   else record_fail "durable-commit: gracioso" "esperava exit 0 em não-git"; fi
   rm -rf "${d}"
 
+  # (g) ARQUIVO EXIGIDO atravessa o .gitignore (sinal de campo de um hub, 2026-10-04): o alvo ignora
+  #     `.claude/` (só os já rastreados seguem rastreados). Um hook NOVO do core é EXIGIDO; um STATE.md
+  #     de sessão é ignorado DE PROPÓSITO e não é exigido. Com a lista: o hook entra, a sessão NÃO.
+  #     Sem a lista: o hook some em silêncio (rc=0) — a polaridade que mostra o defeito verbatim.
+  _dc_ign() {
+    d="$(mktemp -d)"; git -C "${d}" init -q; mkdir -p "${d}/.claude/commands"
+    printf '# existing\n' > "${d}/.claude/commands/existing.md"; git -C "${d}" add -A
+    printf '.claude/\n' > "${d}/.gitignore"; git -C "${d}" add .gitignore; git -C "${d}" commit -qm base
+    mkdir -p "${d}/.claude/hooks" "${d}/.claude/sessions/s"
+    printf '#!/bin/sh\n' > "${d}/.claude/hooks/new-hook.sh"; printf 'x\n' > "${d}/.claude/sessions/s/STATE.md"
+    printf '# changed\n' > "${d}/.claude/commands/existing.md"
+  }
+  local _req _rc
+  _dc_ign; _req="$(mktemp)"; printf '.claude/hooks/new-hook.sh\n.claude/commands/existing.md\n' > "${_req}"
+  _rc=0; ONION_REQUIRED_LIST="${_req}" bash "${helper}" "${d}" update NEW222 >/dev/null 2>&1 || _rc=$?
+  if [ "${_rc}" -eq 0 ] && git -C "${d}" cat-file -e HEAD:.claude/hooks/new-hook.sh 2>/dev/null \
+     && ! git -C "${d}" cat-file -e HEAD:.claude/sessions/s/STATE.md 2>/dev/null; then
+    record_pass "durable-commit: (g) arquivo EXIGIDO atravessa o .gitignore; o ignorado de proposito (sessao) segue fora"
+  else record_fail "durable-commit: (g) exigido x .gitignore" "rc=${_rc}; $(git -C "${d}" ls-tree -r --name-only HEAD | tr '\n' ' ')"; fi
+  rm -rf "${d}"
+  _dc_ign; _rc=0; bash "${helper}" "${d}" update NEW222 >/dev/null 2>&1 || _rc=$?
+  if [ "${_rc}" -eq 0 ] && ! git -C "${d}" cat-file -e HEAD:.claude/hooks/new-hook.sh 2>/dev/null; then
+    record_pass "durable-commit: (g2) sem a lista o arquivo novo ignorado some calado — o defeito do campo, reproduzido"
+  else record_fail "durable-commit: (g2) reproducao do defeito" "rc=${_rc} — o git mudou o comportamento do add? reavalie a cura"; fi
+  rm -rf "${d}"
+  # (h) arquivo EXIGIDO ausente da árvore → exit 3 NOMEANDO, nunca commit parcial calado
+  _dc_ign; printf '.claude/hooks/new-hook.sh\n.claude/hooks/sumiu.sh\n' > "${_req}"
+  local _o; _rc=0; _o="$(ONION_REQUIRED_LIST="${_req}" bash "${helper}" "${d}" update NEW222 2>&1)" || _rc=$?
+  if [ "${_rc}" -eq 3 ] && grep -q 'sumiu.sh' <<< "${_o}" && ! grep -q 'new-hook.sh' <<< "${_o}" && grep -q '^ERRO: 1 arquivo' <<< "${_o}"; then
+    record_pass "durable-commit: (h) exigido ausente → exit 3 nomeando SO ele (1 faltante nao vira N)"
+  else record_fail "durable-commit: (h) exigido ausente" "rc=${_rc}; ${_o:0:200}"; fi
+  rm -rf "${d}"
+  # (g3) NOME DIFÍCIL na lista NUL (Elenxo): acento e espaço chegam; `x[1].md` é LITERAL e não vira o
+  #      glob que forçaria o `x1.md` que o .gitignore exclui de propósito.
+  _dc_ign; mkdir -p "${d}/.claude/kb"; printf 'a\n' > "${d}/.claude/kb/decisão teste.md"
+  printf 'b\n' > "${d}/.claude/kb/x[1].md"; printf 'c\n' > "${d}/.claude/kb/x1.md"
+  printf '%s\0%s\0' '.claude/kb/decisão teste.md' '.claude/kb/x[1].md' > "${_req}"
+  _rc=0; LC_ALL=C ONION_REQUIRED_LIST="${_req}" ONION_REQUIRED_NUL=1 bash "${helper}" "${d}" update NEW222 >/dev/null 2>&1 || _rc=$?
+  if [ "${_rc}" -eq 0 ] && git -C "${d}" cat-file -e "HEAD:.claude/kb/decisão teste.md" 2>/dev/null \
+     && git -C "${d}" cat-file -e 'HEAD:.claude/kb/x[1].md' 2>/dev/null && ! git -C "${d}" cat-file -e HEAD:.claude/kb/x1.md 2>/dev/null; then
+    record_pass "durable-commit: (g3) acento e espaco chegam sob LC_ALL=C; nome com colchete e literal (nao forca o x1.md ignorado)"
+  else record_fail "durable-commit: (g3) nome dificil" "rc=${_rc}; $(git -C "${d}" ls-tree -r --name-only HEAD -- .claude/kb | tr '\n' ' ')"; fi
+  rm -rf "${d}" "${_req}"
+
   unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 }
 
@@ -4634,6 +4678,41 @@ run_vendor_branch_selftests() {
     record_pass "vendor-branch: legado sem vendor → bootstrap + merge"
   else record_fail "vendor-branch: legado" "exit=$rcl ou vendor não semeado"; fi
 
+  # (e2) .gitignore DA VENDOR cobrindo `.claude/` (sinal de campo de um hub, 2026-10-04): o core
+  #      ganha um arquivo NOVO; antes, o `git add` do commit durável o pulava calado e o update dizia
+  #      "merge limpo". Agora ele chega à integração — e o update NÃO é parcial.
+  local c4 t4 ib4; c4="$(mktemp -d)/c4"; t4="$(mktemp -d)/a4"; _vb_core "$c4" 1; _vb_adopter "$t4" "$c4"
+  printf '.claude/\n' > "$t4/.gitignore"; git -C "$t4" add .gitignore; git -C "$t4" commit -qm "ignora .claude"
+  ib4="$(git -C "$t4" rev-parse --abbrev-ref HEAD)"; bash "${helper}" seed "$t4" "$ib4" >/dev/null 2>&1
+  _vb_core "$c4" 2; mkdir -p "$c4/.claude/hooks" "$c4/.claude/validation"; printf '#!/bin/sh\n' > "$c4/.claude/hooks/new-hook.sh"
+  # baseline de catraca NOVO no core: o update o REMOVE de propósito (D_CURE) — a lista de exigidos
+  # tem de excluí-lo, senão todo update de adotante real cairia em rc=12 (mutante que não mordia)
+  printf 'x\n' > "$c4/.claude/validation/foo-baseline.txt"
+  printf 'y\n' > "$c4/.claude/hooks/decisão.md"   # nome acentuado: o tar -t o escapava e dava rc=12 falso
+  git -C "$c4" add -A; git -C "$c4" commit -qm "core v2 + hook novo"
+  local rcg=0; LC_ALL=C bash "${helper}" update "$t4" "$c4" "$(git -C "$c4" rev-parse --short=12 HEAD)" "$ib4" >/dev/null 2>&1 || rcg=$?
+  if [ "$rcg" -eq 0 ] && git -C "$t4" cat-file -e "$ib4:.claude/hooks/new-hook.sh" 2>/dev/null \
+     && git -C "$t4" cat-file -e "$ib4:.claude/hooks/decisão.md" 2>/dev/null \
+     && ! git -C "$t4" cat-file -e "$ib4:.claude/validation/foo-baseline.txt" 2>/dev/null; then
+    record_pass "vendor-branch: (e2) arquivo NOVO do core chega mesmo com .gitignore cobrindo .claude/ na vendor (e o baseline de catraca segue fora)"
+  else record_fail "vendor-branch: (e2) arquivo novo x .gitignore" "rc=$rcg; o hook novo $(git -C "$t4" cat-file -e "$ib4:.claude/hooks/new-hook.sh" 2>/dev/null && echo chegou || echo NAO chegou)"; fi
+
+  # (e3) O rc=12 É A CURA, e precisa de caso próprio (Elenxo: trocar os dois `return 12` por no-op
+  #      deixava as famílias verdes e o defeito voltava calado como "nada a mergear"). O commit
+  #      durável falha de verdade — filtro de git obrigatório e quebrado, o modo de um LFS mal
+  #      configurado — e o update tem de devolver 12 SEM mexer na integração.
+  local c5 t5 ib5 h5; c5="$(mktemp -d)/c5"; t5="$(mktemp -d)/a5"; _vb_core "$c5" 1; _vb_adopter "$t5" "$c5"
+  printf '.claude/hooks/novo.sh filter=quebrado\n' > "$t5/.gitattributes"; git -C "$t5" add .gitattributes; git -C "$t5" commit -qm attrs
+  ib5="$(git -C "$t5" rev-parse --abbrev-ref HEAD)"; bash "${helper}" seed "$t5" "$ib5" >/dev/null 2>&1
+  git -C "$t5" config filter.quebrado.clean false; git -C "$t5" config filter.quebrado.required true
+  _vb_core "$c5" 2; mkdir -p "$c5/.claude/hooks"; printf '#!/bin/sh\n' > "$c5/.claude/hooks/novo.sh"
+  git -C "$c5" add -A; git -C "$c5" commit -qm "core v2"
+  h5="$(git -C "$t5" rev-parse "$ib5")"
+  local rce=0; bash "${helper}" update "$t5" "$c5" "$(git -C "$c5" rev-parse --short=12 HEAD)" "$ib5" >/dev/null 2>&1 || rce=$?
+  if [ "$rce" -eq 12 ] && [ "$(git -C "$t5" rev-parse "$ib5")" = "$h5" ]; then
+    record_pass "vendor-branch: (e3) commit duravel que falha → rc=12 e a integracao INTACTA (nunca 'nada a mergear')"
+  else record_fail "vendor-branch: (e3) rc=12" "rc=$rce; integracao $( [ "$(git -C "$t5" rev-parse "$ib5")" = "$h5" ] && echo intacta || echo MEXIDA)"; fi
+
   # (f) legado REALISTA (spec §8): .onion-version pinado + customização COMMITADA + sem vendor → o bootstrap
   #     ramifica do BASELINE LIMPO (framework == core@pin), não do HEAD → CONFLITO, não clobra a customização
   local c4 t4 ib4 pin4
@@ -4916,6 +4995,193 @@ _research_workflow_run_body() {
   out="$(node "${d}/body.mjs" 2>&1 || true)"
   rm -rf "${d}"
   printf '%s\n' "${out}"
+}
+
+# ── CORPUS-GREP: o script que alimenta TODA invocação de pesquisa, e que estava sem bancada ──────
+# POR QUE EXISTE: a skill onion-research injeta o bloco de corpus por `!`backtick``, que o shell
+# AVALIA. Em 2026-10-01 uma pergunta com PARÊNTESES devolveu `syntax error near unexpected token '('`
+# e ABORTOU a invocação da skill inteira — não degradou, matou. O script tinha ZERO cobertura, e é
+# dele que depende a 1ª cláusula da doutrina ("corpus primeiro"). Guarda de entrada sem bancada é
+# onde o defeito mora de graça.
+# ── ORDEM DA CADEIA DE AUTO-FIX DO HOOK: a dependência que era PROSA vira invariante ─────────────
+# POR QUE EXISTE (custo medido em 2026-10-01, num único dia): erro de ORDEM entre guardas custou pelo
+# menos QUATRO ciclos de CI — o painel da REGRA 81 contando um resíduo que nasceu DEPOIS dele (o commit
+# se chama "3ª vez"), o SHA da REGRA 56 carimbado antes de regenerar projeções (ARTEFATO-CADUCO, 2x), e
+# projeções julgadas antes de regeneradas. A cura foi sempre PROSA — "regenerar → stagear → carimbar →
+# commitar de uma vez" —, e prosa é a forma de cura que esta casa já declarou insuficiente.
+#
+# O hook JÁ resolve a ordem, e até a declara num comentário ("E O HASH DA REGRA 56 RE-CARIMBADO, senao a
+# cura acima cria outro defeito"). O que faltava: a ordem é POSIÇÃO DE LINHA, não invariante. Nada
+# impede um auto-fix NOVO entrar DEPOIS do carimbo — e esse é precisamente o defeito, porque qualquer
+# mutação do índice após o carimbo torna o hash caduco de novo.
+#
+# O INVARIANTE, derivado do que já existe (não declarado à mão): **depois do re-carimbo do SHA da
+# REGRA 56, nenhuma linha do hook pode mutar o índice nem reescrever arquivo rastreado.** Medido em
+# 2026-10-01: vale hoje (zero `git add`, zero `sed -i`, zero redirecionamento para ${REPO_ROOT} após a
+# linha do carimbo). Cobrar o estado que EXISTE é o que torna isto guarda e não desejo.
+# TETO DECLARADO: isto é DETECÇÃO de uma ordem, não prova de ordem correta em geral — o corpus de 93
+# guardas segue sem grafo de dependência, e isso é fio aberto no grafo, não resolvido aqui.
+# ── MUTANTE ESQUECIDO: a camada que NÃO depende do processo sobreviver ───────────────────────────
+# POR QUE EXISTE (dano consumado em 2026-10-01): um `exit 137` (SIGKILL do OOM killer) matou a sessão no
+# meio de um teste de mutação e deixou um `git add` plantado no `.githooks/pre-commit` — justamente o
+# defeito que a guarda recém-escrita existia para pegar. O repo ficou PIOR que antes do teste.
+# ⚠️ E A CURA ÓBVIA É FALSA: `trap` NÃO intercepta SIGKILL. Por isso a defesa tem duas camadas, e esta
+# família cobra a SEGUNDA — marcador no mutante + guarda que o reprova —, que funciona mesmo quando o
+# processo evapora. Testar só o `trap` seria testar a camada que já se sabe insuficiente.
+run_mutant_leftover_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/mutant-leftover-check.sh"
+  local helper="${REPO_ROOT}/ops/mutate-and-restore.sh"
+  if [ ! -x "${sut}" ]; then record_fail "mutant-leftover" "SUT ausente ou não-executável: ${sut}"; return; fi
+
+  # o marcador é partido para esta FAMÍLIA não se acusar (mesmo cuidado do SUT)
+  local _M="ONION""_MUTANTE"
+
+  # (a) árvore LIMPA ⇒ silêncio e rc=0
+  local _rc=0 _out
+  _out="$(bash "${sut}" "${REPO_ROOT}" 2>&1)" || _rc=$?
+  if [ "${_rc}" = "0" ] && [ -z "${_out}" ]; then
+    record_pass "mutant-leftover: (a) árvore limpa ⇒ rc=0 e silêncio"
+  else record_fail "mutant-leftover: (a)" "árvore limpa devolveu rc=${_rc} e saída '${_out}' — a guarda está acusando o que não existe, ou se acusando a si mesma"; fi
+
+  # (b) MUTANTE PLANTADO num sandbox git ⇒ ACUSA com rc=1 e NOMEIA o arquivo
+  local sb; sb="$(mktemp -d)"
+  ( cd "${sb}" && git init -q . && printf 'ok\n' > alvo.txt && git add alvo.txt \
+    && git -c user.email=t@t -c user.name=t commit -qm init ) >/dev/null 2>&1
+  printf 'linha com %s plantado\n' "${_M}" >> "${sb}/alvo.txt"
+  ( cd "${sb}" && git add alvo.txt ) >/dev/null 2>&1
+  _rc=0; _out="$(bash "${sut}" "${sb}" 2>&1)" || _rc=$?
+  if [ "${_rc}" = "1" ] && grep -qF 'alvo.txt' <<< "${_out}"; then
+    record_pass "mutant-leftover: (b) mutante rastreado ⇒ rc=1 e a mensagem NOMEIA o arquivo"
+  else record_fail "mutant-leftover: (b)" "mutante plantado devolveu rc=${_rc} sem nomear alvo.txt — saída: ${_out}"; fi
+
+  # (c) o marcador em arquivo NÃO-RASTREADO é legítimo (é onde a bancada trabalha) ⇒ silêncio
+  # restaura do COMMIT, não do índice: em (b) o mutante foi staged, então `git checkout -- <f>` o
+  # traria DE VOLTA do índice. Defeito desta própria fixture, achado ao rodar (2026-10-01).
+  ( cd "${sb}" && git reset -q && git checkout -q HEAD -- alvo.txt ) >/dev/null 2>&1
+  printf 'rascunho com %s\n' "${_M}" > "${sb}/scratch.txt"
+  _rc=0; _out="$(bash "${sut}" "${sb}" 2>&1)" || _rc=$?
+  if [ "${_rc}" = "0" ]; then
+    record_pass "mutant-leftover: (c) marcador em arquivo NÃO-rastreado não acusa (a bancada trabalha em untracked)"
+  else record_fail "mutant-leftover: (c)" "acusou marcador em untracked (rc=${_rc}) — isso reprovaria todo scratchpad: ${_out}"; fi
+  rm -rf "${sb}"
+
+  # (d) alvo que NÃO é repo git ⇒ rc=3 (recusa), nunca 0 fingindo limpeza
+  local nr; nr="$(mktemp -d)"; _rc=0
+  bash "${sut}" "${nr}" >/dev/null 2>&1 || _rc=$?
+  if [ "${_rc}" = "3" ]; then
+    record_pass "mutant-leftover: (d) alvo sem git ⇒ rc=3 (recusa declarada, não conformidade por ausência)"
+  else record_fail "mutant-leftover: (d)" "alvo sem git devolveu rc=${_rc}; esperado 3 — `exit 0` ali seria declarar limpo o que não foi medido"; fi
+  rm -rf "${nr}"
+
+  # (e) o HELPER é fail-closed: RECUSA plantar mutante SEM marcador — senão ele some sem rastro
+  if [ -x "${helper}" ]; then
+    _rc=0; _out="$(bash "${helper}" "${REPO_ROOT}/.githooks/pre-commit" 'git add|||git añd' true 2>&1)" || _rc=$?
+    if [ "${_rc}" = "2" ] && grep -qiF 'RECUSADO' <<< "${_out}"; then
+      record_pass "mutant-leftover: (e) o helper RECUSA mutante sem marcador (fail-closed)"
+    else record_fail "mutant-leftover: (e)" "o helper aceitou mutante SEM marcador (rc=${_rc}) — mutante sem marcador é exatamente o que desapareceu sem rastro em 2026-10-01"; fi
+  else record_skip "mutant-leftover: (e) ops/mutate-and-restore.sh ausente"; fi
+  # (f) ACHADO DO PRÓPRIO GATE, 2026-10-01: a 1ª versão acusou o RESÍDUO DE REVISÃO deste PR, porque
+  #     documento que ENSINA a regra escreve o marcador. A allowlist é por PREFIXO porque o nome do
+  #     resíduo deriva da branch e não se pode enumerar.
+  # sandbox PRÓPRIA desta cura; a família já declara `_M` no topo — redeclarar foi defeito meu
+  local al; al="$(mktemp -d)"; git -C "${al}" init -q -b main 2>/dev/null || true
+  mkdir -p "${al}/docs/evolution/review" "${al}/docs/knowledge-base"
+  printf 'a REGRA 94 procura o marcador %s na arvore\n' "${_M}" > "${al}/docs/evolution/review/alguma-branch.md"
+  printf 'doutrina citando %s\n' "${_M}" > "${al}/docs/knowledge-base/doutrina.md"
+  git -C "${al}" add -A >/dev/null 2>&1
+  local rc_al=0; bash "${sut}" "${al}" >/dev/null 2>&1 || rc_al=$?
+  if [ "${rc_al}" = "0" ]; then
+    record_pass "mutant-leftover: (f) prosa que ENSINA a regra (resíduo, KB) NÃO é acusada — allowlist por prefixo"
+  else record_fail "mutant-leftover: (f)" "a guarda acusou doutrina/resíduo que só CITAM o marcador (rc=${rc_al}) — é o falso positivo que o gate achou em 2026-10-01"; fi
+
+  # (g) O TETO DA ALLOWLIST É POR CAMINHO, NUNCA POR EXTENSÃO: um `.md` FORA dela segue julgado.
+  #     Sem este caso, alguém "simplificaria" a cura excluindo `*.md` e abriria o buraco calado.
+  printf 'linha mutada %s\n' "${_M}" > "${al}/docs/outro-lugar.md"
+  git -C "${al}" add -A >/dev/null 2>&1
+  local rc_md=0; bash "${sut}" "${al}" >/dev/null 2>&1 || rc_md=$?
+  if [ "${rc_md}" = "1" ]; then
+    record_pass "mutant-leftover: (g) \`.md\` FORA da allowlist segue acusado — a exceção é por CAMINHO, não por extensão"
+  else record_fail "mutant-leftover: (g)" "um .md fora da allowlist passou (rc=${rc_md}) — a cura virou buraco por extensão"; fi
+
+}
+
+run_hook_chain_order_selftests() {
+  local hook="${REPO_ROOT}/.githooks/pre-commit"
+  if [ ! -f "${hook}" ]; then record_skip "hook-chain-order: .githooks/pre-commit ausente"; return; fi
+
+  # a âncora é o EFEITO (a mensagem que o hook imprime ao re-carimbar), não um número de linha
+  local _stamp_line
+  _stamp_line="$(grep -n 'hash da REGRA 56 re-carimbado em' "${hook}" | head -1 | cut -d: -f1)"
+  if [ -z "${_stamp_line}" ]; then
+    record_fail "hook-chain-order: (a)" "não achei o re-carimbo do SHA da REGRA 56 no hook — ou ele saiu, ou a mensagem mudou; nos dois casos a ordem deixou de ser verificável"
+    return
+  fi
+  record_pass "hook-chain-order: (a) o re-carimbo do SHA da REGRA 56 existe no hook (l.${_stamp_line})"
+
+  # (b) O INVARIANTE: nada muta o índice nem reescreve arquivo DEPOIS do carimbo
+  local _after
+  _after="$(awk -v L="${_stamp_line}" 'NR>L && (/git add/ || /sed -i/ || /> *"\$\{REPO_ROOT\}/) {printf "l.%s ", NR}' "${hook}")"
+  if [ -z "${_after}" ]; then
+    record_pass "hook-chain-order: (b) nada muta o índice depois do carimbo — o SHA da REGRA 56 não caduca por auto-fix posterior"
+  else record_fail "hook-chain-order: (b)" "há mutação de índice/arquivo DEPOIS do re-carimbo do SHA (${_after}) — isso torna o hash caduco de novo, que é o defeito ARTEFATO-CADUCO medido 2x em 2026-10-01. Mova o auto-fix novo para ANTES do bloco do carimbo"; fi
+
+  # (c) PARIDADE DE FÓRMULA: o hook e o gate têm de concordar sobre o MESMO número, senão discordam
+  # sobre o mesmo PR. Os dois usam os flags canônicos e excluem docs/evolution/review/.
+  local chk="${REPO_ROOT}/.claude/validation/review-artifact-check.sh"
+  if [ -f "${chk}" ]; then
+    local _h_ok=0 _c_ok=0
+    grep -qF "core.abbrev=40 -c diff.noprefix=false" "${hook}" && grep -qF "':(exclude)docs/evolution/review'" "${hook}" && _h_ok=1
+    grep -qF "core.abbrev=40 -c diff.noprefix=false" "${chk}"  && grep -qF '":(exclude)${REVIEW_DIR}"' "${chk}" && _c_ok=1
+    if [ "${_h_ok}" = "1" ] && [ "${_c_ok}" = "1" ]; then
+      record_pass "hook-chain-order: (c) hook e gate calculam o SHA com os MESMOS flags canônicos e a mesma exclusão"
+    else record_fail "hook-chain-order: (c)" "hook(${_h_ok}) e gate(${_c_ok}) divergem na fórmula do SHA — um carimba um número que o outro não reconhece, e o PR fica preso sem causa visível"; fi
+  else record_skip "hook-chain-order: (c) review-artifact-check.sh ausente"; fi
+}
+
+run_corpus_grep_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/kg-corpus-grep.sh"
+  local skill="${REPO_ROOT}/.claude/skills/onion-research/SKILL.md"
+  if [ ! -f "${sut}" ]; then record_fail "corpus-grep" "SUT ausente: ${sut}"; return; fi
+
+  # (a) o caso MEDIDO: metacaractere de shell na frase não pode quebrar nem virar termo-frase
+  local _o _rc=0
+  _o="$(bash "${sut}" --query 'JEV (jevtypesafeai.com): type-safe & tudo | x; y' 2>&1)" || _rc=$?
+  if [ "${_rc}" = "0" ] && grep -q '^# corpus:' <<< "${_o}" \
+     && grep -q 'termos:.*jev' <<< "${_o}" \
+     && ! grep -qF 'type-safe & tudo | x; y' <<< "${_o}"; then
+    record_pass "corpus-grep: (a) --query com (), &, | e ; roda e separa em TERMOS (sem termo-frase)"
+  else record_fail "corpus-grep: (a)" "rc=${_rc} — metacaractere na frase quebrou, ou a frase inteira entrou como um termo (foi o bug da própria cura: shift dentro de 'for a in \"\$@\"' não move a iteração)"; fi
+
+  # (b) a forma POSICIONAL continua valendo — a cura não pode trocar um contrato por outro
+  _rc=0; _o="$(bash "${sut}" adopt federacao 2>&1)" || _rc=$?
+  if [ "${_rc}" = "0" ] && grep -q 'termos: adopt, federacao' <<< "${_o}"; then
+    record_pass "corpus-grep: (b) a forma posicional <termo> [termo...] segue funcionando"
+  else record_fail "corpus-grep: (b)" "a forma antiga quebrou (rc=${_rc}) — adicionar --query não pode revogar o contrato existente"; fi
+
+  # (c) sem termo RECUSA (rc=2), nunca varre o corpus inteiro em silêncio
+  _rc=0; bash "${sut}" >/dev/null 2>&1 || _rc=$?
+  if [ "${_rc}" = "2" ]; then
+    record_pass "corpus-grep: (c) sem termo ⇒ rc=2 (recusa, não varredura silenciosa)"
+  else record_fail "corpus-grep: (c)" "sem termo devolveu rc=${_rc}; esperado 2 — varrer tudo por omissão é fail-open"; fi
+
+  # (d) `--query ""` é o MESMO caso de (c): frase vazia não é licença para varrer tudo
+  _rc=0; bash "${sut}" --query '' >/dev/null 2>&1 || _rc=$?
+  if [ "${_rc}" = "2" ]; then
+    record_pass "corpus-grep: (d) --query vazio ⇒ rc=2 (a frase vazia não vira varredura total)"
+  else record_fail "corpus-grep: (d)" "--query '' devolveu rc=${_rc}; esperado 2"; fi
+
+  # (e) --query conversa com --json (as flags não se excluem)
+  _rc=0; _o="$(bash "${sut}" --query 'adopt' --json 2>&1)" || _rc=$?
+  if [ "${_rc}" = "0" ] && python3 -c 'import json,sys; json.load(sys.stdin)' <<< "${_o}" 2>/dev/null; then
+    record_pass "corpus-grep: (e) --query + --json devolve JSON válido"
+  else record_fail "corpus-grep: (e)" "--query com --json não devolveu JSON parseável (rc=${_rc})"; fi
+
+  # (f) PARIDADE com a skill: ela tem de usar a forma SEGURA. Mutante: voltar ao $ARGUMENTS nu reprova.
+  if [ -f "${skill}" ]; then
+    if grep -qF 'kg-corpus-grep.sh --query "$ARGUMENTS"' "${skill}"; then
+      record_pass "corpus-grep: (f) a skill injeta por --query \"\$ARGUMENTS\" (forma que torna (), &, ; e | inertes)"
+    else record_fail "corpus-grep: (f)" "a skill onion-research não usa \`--query \"\$ARGUMENTS\"\` — com \$ARGUMENTS NU, uma pergunta com parêntese mata a invocação inteira da skill (medido 2026-10-01)"; fi
+  else record_skip "corpus-grep: (f) skill onion-research ausente"; fi
 }
 
 run_research_workflow_selftests() {
@@ -5204,9 +5470,25 @@ run_pretooluse_veto_selftests() {
   _pv() {
     local hook="$1" br="$2" c="$3" rc=0
     git -C "${d}" checkout -q "${br}" 2>/dev/null || git -C "${d}" checkout -q -b "${br}"
-    printf '{"tool_input":{"command":%s}}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "${c}")" \
+    # o JSON nasce pelo STDIN: por argv, comando de 128 KiB+ estourava E2BIG e o hook recebia
+    # `{"command":}` — o caso de 140 KB passava VAZIO (Elenxo, 2ª passada, M1)
+    printf '%s' "${c}" | python3 -c 'import json,sys;print(json.dumps({"tool_input":{"command":sys.stdin.read()}}))' \
       | (cd "${d}" && CLAUDE_PROJECT_DIR="${d}" bash "${hook}" >/dev/null 2>&1) || rc=$?
     printf '%s' "${rc}"
+  }
+  # _pvw <hook> <branch-da-raiz> <cwd> <comando> → o JSON carrega `cwd`, como o do Claude Code; o
+  # processo do hook roda na RAIZ, então só o campo pode decidir (Elenxo, 2ª passada, B2)
+  _pvw() {
+    local hook="$1" br="$2" w="$3" c="$4" rc=0
+    git -C "${d}" checkout -q "${br}" 2>/dev/null || git -C "${d}" checkout -q -b "${br}"
+    printf '%s' "${c}" | W="${w}" python3 -c 'import json,os,sys;print(json.dumps({"cwd":os.environ["W"],"tool_input":{"command":sys.stdin.read()}}))' \
+      | (cd "${d}" && CLAUDE_PROJECT_DIR="${d}" bash "${hook}" >/dev/null 2>&1) || rc=$?
+    printf '%s' "${rc}"
+  }
+  _casew() {  # <nome> <esperado> <hook> <branch-da-raiz> <cwd> <comando>
+    local got; got="$(_pvw "$3" "$4" "$5" "$6")"
+    if [ "${got}" = "$2" ]; then record_pass "pretooluse-veto: $1 (rc=$2)"
+    else record_fail "pretooluse-veto: $1" "esperava rc=$2, veio rc=${got} — cmd: $6 (cwd ${5})"; fi
   }
   _case() {  # <nome> <esperado> <hook> <branch> <comando>
     local got; got="$(_pv "$3" "$4" "$5")"
@@ -5239,6 +5521,17 @@ run_pretooluse_veto_selftests() {
   _case "protect-main: command git push -f main → VETO"    2 "${pm}" feat 'command git push -f origin main'
   # escopo (2026-09-02): alvo em OUTRO repo não é assunto destes vetos; `-C .` e `-C <raiz>` continuam sendo
   mkdir -p "${d}/outro-repo"; git -C "${d}/outro-repo" init -q
+  # "outro PROJETO" só se prova com os dois remotos existindo e diferindo (2026-10-05): a fixture
+  # espelha o mundo real — o core e um adotante, cada um com o seu origin
+  git -C "${d}" remote add origin https://github.com/o/core.git 2>/dev/null || true
+  git -C "${d}/outro-repo" remote add origin https://github.com/x/adotante.git || true
+  mkdir -p "${d}/sem-remoto"; git -C "${d}/sem-remoto" init -q
+  _case "merge-gate: outro repo SEM remoto → VETO (não se prova)" 2 "${mg}" feat "git -C ${d}/sem-remoto push origin main"
+  # --work-tree NÃO muda o repositório: o push é do NOSSO (Elenxo, 2026-10-05)
+  _case "protect-main: --work-tree=outro → VETO"           2 "${pm}" feat "git --work-tree=${d}/outro-repo push -f origin main"
+  # `cd` CONDICIONAL não isenta: sob `if` pode não rodar; antes de `||` o autor prevê a falha
+  _case "protect-main: cd sob if → VETO"                   2 "${pm}" feat "if false; then cd ${d}/outro-repo; fi; git push -f origin main"
+  _case "protect-main: cd … || true; push → VETO"          2 "${pm}" feat "cd ${d}/outro-repo || true; git push -f origin main"
   _case "merge-gate: git -C /outro/repo push origin main → passa (não é nosso repo)"  0 "${mg}" feat "git -C ${d}/outro-repo push origin main"
   _case "protect-main: git -C /outro/repo push -f origin main → passa (não é nosso repo)" 0 "${pm}" feat "git -C ${d}/outro-repo push -f origin main"
   _case "merge-gate: git -C . push origin main → VETO"        2 "${mg}" feat 'git -C . push origin main'
@@ -5254,6 +5547,226 @@ run_pretooluse_veto_selftests() {
   _case "merge-gate: sudo git push origin main → VETO"     2 "${mg}" feat 'sudo -u x git push origin main'
   _case "merge-gate: \$(gh pr merge) subshell → VETO"      2 "${mg}" feat 'out=$(gh pr merge 1)'
   _case "merge-gate: bash -c push de feature → passa"      0 "${mg}" feat 'bash -c "git push origin feat"'
+  # ── TOKENIZADOR (2026-10-05): as formas que o juiz do radar E3 mediu escapando, VERBATIM, e as que o
+  #    estudo do binário 2.1.289 revelou. Todas passavam rc=0 nos dois vetos com a lib de sed.
+  _case "protect-main: +main (force pelo refspec) → VETO"  2 "${pm}" feat 'git push origin +main'
+  _case "protect-main: +HEAD:main → VETO"                  2 "${pm}" feat 'git push origin +HEAD:main'
+  _case "protect-main: --mirror → VETO"                    2 "${pm}" feat 'git push --mirror origin'
+  _case "protect-main: nice -n 5 git push -f main → VETO"  2 "${pm}" feat 'nice -n 5 git push -f origin main'
+  _case "merge-gate: main entre aspas → VETO"              2 "${mg}" feat 'git push origin "main"'
+  _case "merge-gate: push :main (apaga a main) → VETO"     2 "${mg}" feat 'git push origin :main'
+  _case "merge-gate: TZ= + bash -c → VETO"                 2 "${mg}" feat 'TZ="$HOME" bash -c "gh pr merge 1"'
+  _case "merge-gate: timeout 60 → VETO"                    2 "${mg}" feat 'timeout 60 gh pr merge 1'
+  _case "merge-gate: gh -R o/r → VETO"                     2 "${mg}" feat 'gh -R o/r pr merge 1'
+  _case "merge-gate: /usr/bin/gh → VETO"                   2 "${mg}" feat '/usr/bin/gh pr merge 1'
+  _case "merge-gate: nome entre aspas → VETO"              2 "${mg}" feat '"gh" pr merge 1'
+  _case "merge-gate: & simples → VETO"                     2 "${mg}" feat 'echo x & gh pr merge 1'
+  _case "merge-gate: if/then → VETO"                       2 "${mg}" feat 'if true; then gh pr merge 1; fi'
+  _case "merge-gate: eval → VETO (recusa, não recursa)"    2 "${mg}" feat 'eval "gh pr merge 1"'
+  _case "merge-gate: xargs gh → VETO"                      2 "${mg}" feat 'echo 1 | xargs gh pr merge'
+  _case "merge-gate: nome dinâmico \$(echo gh) → VETO"     2 "${mg}" feat '$(echo gh) pr merge 1'
+  _case "merge-gate: heredoc SEM aspas com \$(…) → VETO"  2 "${mg}" feat $'cat <<EOF\n$(gh pr merge 1)\nEOF'
+  _case "merge-gate: brace expansion no nome → VETO"       2 "${mg}" feat '{gh,} pr merge 1'
+  _case "merge-gate: atribuição literal B=main → VETO"     2 "${mg}" feat 'B=main; git push origin $B'
+  _case "merge-gate: graphql mergePullRequest → VETO"      2 "${mg}" feat 'gh api graphql -f query=mutation{mergePullRequest}'
+  # ── as polaridades HONESTAS do tokenizador: texto entre aspas é dado, não invocação ──
+  # a forma EXATA que o sed antigo quebrava: o `;` dentro das aspas ANTES do vocabulário fazia
+  # `gh pr merge 1'` começar uma linha e vetar uma string (falso positivo medido em 2026-10-05)
+  _case "merge-gate: ; DENTRO de aspas não parte → passa"  0 "${mg}" feat "echo 'x; gh pr merge 1'"
+  _case "merge-gate: heredoc COM aspas e \$(…) → passa"    0 "${mg}" feat $'cat <<\'EOF\'\n$(gh pr merge 1)\nEOF'
+  _case "protect-main: printf de '+main' → passa"         0 "${pm}" feat "printf '%s' 'git push origin +main'"
+  _case "merge-gate: B=feat; push \$B → passa"             0 "${mg}" feat 'B=feat; git push origin $B'
+  _case "protect-main: force de feature por +ref → passa"  0 "${pm}" feat 'git push origin +feat'
+  # ── os 5 falsos positivos que a REEXECUÇÃO dos 12.268 comandos reais pegou na 1ª versão desta lib ──
+  _case "merge-gate: \$( com aspas e parênteses dentro → passa" 0 "${mg}" feat $'f=x; echo "n: $(grep -c \'REGRA 65 (\' $f) m: $(printf \'%s\' "$o" | grep -c \'y\')"; git push origin feat'
+  _case "merge-gate: xargs gh run view (leitura) → passa"  0 "${mg}" feat "gh run list --json databaseId -q '.[0].databaseId' | xargs -I{} gh run view {} --log-failed"
+  _case "merge-gate: xargs gh api com caminho → passa"     0 "${mg}" feat "echo 1 | xargs -I{} gh api repos/o/r/actions/jobs/{} --jq .name"
+  _case "merge-gate: texto inanalisável SEM forma de merge → passa" 0 "${mg}" feat "echo 'push the button"
+  _case "merge-gate: xargs git push (refspec do stdin) → VETO" 2 "${mg}" feat 'echo main | xargs git push origin'
+  # ── `cd` para OUTRO repo (os 5 vetos restantes da reexecução: falso positivo PRÉ-existente) ──
+  _case "merge-gate: cd /outro/repo && push main → passa"  0 "${mg}" feat "cd ${d}/outro-repo && git push origin main"
+  _case "merge-gate: cd outro && cd \$X && push main → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && cd \$X && git push origin main"
+  # os `)` dos padrões de `case` dentro de `bash -c` esvaziavam a pilha de escopo → IndexError →
+  # o fallback vetava a string inteira (reexecução v4 dos comandos reais, 2026-10-05)
+  #    reprodutor MÍNIMO obtido por minimização do comando real: são precisas DUAS linhas, cada uma
+  #    desempilha um nível a mais do que empilhou e a segunda esvazia a pilha
+  _case "merge-gate: dois case dentro de bash -c → passa"  0 "${mg}" feat $'X="/tmp/x/next-index-1.lock" bash -c \'case "${X:-}" in ""|*/index|*/index.lock) echo "J";; *) echo "I (ok)";; esac\'\nX="/r/.git/index.lock" bash -c \'case "${X:-}" in ""|*/index|*/index.lock) echo "J (ok)";; *) echo "I";; esac\''
+  # as três rotas pelas quais a isenção do cd viraria falha ABERTA — todas têm de seguir vetando
+  _case "merge-gate: (cd outro); push main → VETO (subshell)"   2 "${mg}" feat "(cd ${d}/outro-repo); git push origin main"
+  _case "merge-gate: \$(cd outro); push main → VETO (subst.)"  2 "${mg}" feat "x=\$(cd ${d}/outro-repo && pwd); git push origin main"
+  _case "merge-gate: bash -c 'cd outro'; push main → VETO"     2 "${mg}" feat "bash -c 'cd ${d}/outro-repo'; git push origin main"
+  # ── ELENXO DA FORJA (2026-10-05): os quatro escapes NOVOS que a 1ª versão da reescrita abriu ──
+  _case "protect-main: # no MEIO da palavra não é comentário → VETO" 2 "${pm}" feat 'echo x#; git push -f origin main'
+  mkdir -p "${d}/wt-parent"; git -C "${d}" worktree add -q "${d}/wt-parent/wt1" -b wtb 2>/dev/null || true
+  _case "protect-main: cd para WORKTREE do mesmo projeto → VETO" 2 "${pm}" feat "cd ${d}/wt-parent/wt1 && git push -f origin main"
+  _case "protect-main: git -C worktree do mesmo projeto → VETO"   2 "${pm}" feat "git -C ${d}/wt-parent/wt1 push -f origin main"
+  _case "protect-main: time -p → VETO"                     2 "${pm}" feat 'time -p git push -f origin main'
+  _case "merge-gate: \$X com espaço (word-splitting) → VETO" 2 "${mg}" feat 'X="gh pr merge"; $X 12'
+  # ── escapes ANTIGOS que eram reais (o hook de sed também os deixava passar) ──
+  _case "protect-main: continuação de linha junta (m\\<LF>ain) → VETO" 2 "${pm}" feat $'git push -f origin m\\\nain'
+  _case "protect-main: heads/main (DWIM) → VETO"           2 "${pm}" feat 'git push -f origin HEAD:heads/main'
+  _case "protect-main: glob refs/heads/* → VETO"           2 "${pm}" feat "git push -f origin 'refs/heads/*'"
+  _case "protect-main: brace {main,feat} → VETO"           2 "${pm}" feat 'git push -f origin {main,feat}'
+  _case "merge-gate: destino = branch PADRÃO (symbolic-ref) → VETO" 2 "${mg}" feat "git push origin \"\$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's@^origin/@@')\""
+  _case "merge-gate: \$((1<<x)) não é heredoc → VETO"      2 "${mg}" feat $'echo $((1<<EOF))\ngh pr merge 1\nEOF'
+  _case "merge-gate: echo literal | xargs git push origin → VETO" 2 "${mg}" feat 'echo main | xargs git push origin'
+  _case "merge-gate: shell lendo stdin de pipe → VETO"     2 "${mg}" feat "echo 'gh pr merge 12' | bash"
+  _case "merge-gate: bash < <(…) → VETO"                   2 "${mg}" feat "bash < <(echo 'gh pr merge 1')"
+  _case "merge-gate: env -S 'cmd' → VETO"                  2 "${mg}" feat "env -S 'gh pr merge 1'"
+  _case "merge-gate: watch (executor) → VETO"              2 "${mg}" feat 'watch -n1 gh pr merge 1'
+  _case "merge-gate: find -exec → VETO"                    2 "${mg}" feat 'find . -maxdepth 0 -exec gh pr merge 1 \;'
+  _case "merge-gate: su -c '…' → VETO"                     2 "${mg}" feat "su -c 'gh pr merge 1' marcio"
+  _case "merge-gate: function definida na string → VETO"   2 "${mg}" feat 'function f { gh pr merge 1; }; f'
+  _case "merge-gate: gh pr MERGE (caixa) → VETO"           2 "${mg}" feat 'gh pr MERGE 12'
+  _case "merge-gate: gh alias set … merge → VETO"          2 "${mg}" feat "gh alias set pm 'pr merge'; gh pm 12"
+  _case "merge-gate: git -c alias.p=push → VETO"           2 "${mg}" feat 'git -c alias.p=push p origin main'
+  _case "merge-gate: API com %6D e // → VETO"              2 "${mg}" feat 'gh api -X PUT repos/o/r/pulls/12//%6Derge'
+  _case "merge-gate: pulls/\$(…)/merge → VETO"             2 "${mg}" feat 'gh api -X PUT repos/o/r/pulls/$(echo 12)/merge'
+  _case "merge-gate: …/merges com base=main → VETO"        2 "${mg}" feat 'gh api repos/o/r/merges -f base=main -f head=feat'
+  _case "merge-gate: git/refs/heads/main PATCH → VETO"     2 "${mg}" feat 'gh api -X PATCH repos/o/r/git/refs/heads/main -F force=true'
+  _case "merge-gate: graphql enablePullRequestAutoMerge → VETO" 2 "${mg}" feat "gh api graphql -f query='mutation{enablePullRequestAutoMerge(input:{}){clientMutationId}}'"
+  _case "merge-gate: graphql com query de arquivo → VETO"  2 "${mg}" feat 'gh api graphql -F query=@m.graphql'
+  _case "merge-gate: IFS + \$x → VETO"                     2 "${mg}" feat 'IFS=,; x=gh,pr,merge,1; $x'
+  _case "merge-gate: export B=main; push \$B → VETO"       2 "${mg}" feat 'export B=main; git push origin $B'
+  # os dois mutantes que SOBREVIVIAM à bancada dele, agora com caso
+  _case "merge-gate: <<\\EOF é inerte (barra cita o delimitador) → passa" 0 "${mg}" feat $'cat <<\\EOF\n$(gh pr merge 1)\nEOF'
+  _case "merge-gate: ! gh pr merge → VETO"                 2 "${mg}" feat '! gh pr merge 1'
+  # ── os FALSOS POSITIVOS que ele achou, curados ──
+  _case "merge-gate: caminho verificado por \$(…)/ops/ → passa" 0 "${mg}" feat '"$(git rev-parse --show-toplevel)/ops/pr-merge-verified.sh" 12 --sync'
+  _case "merge-gate: \$PYTHON tools/merge.py → passa"      0 "${mg}" feat '$PYTHON tools/merge.py'
+  _case "merge-gate: \"\$f\" --merge → passa"              0 "${mg}" feat 'for f in a b; do "$f" --merge; done'
+  _case "merge-gate: gh pr merge --help → passa"           0 "${mg}" feat 'gh pr merge --help'
+  _case "merge-gate: git push --dry-run main → passa"      0 "${mg}" feat 'git push --dry-run origin main'
+  _case "merge-gate: cat lista | xargs push sem force → passa" 0 "${mg}" feat 'cat x | xargs -I{} git push origin {}'
+  _case "merge-gate: …/merges com base=feat → passa"       0 "${mg}" feat 'gh api repos/o/r/merges -f base=feat -f head=x'
+  _case "merge-gate: GET em pulls/N/merge → passa"         0 "${mg}" feat 'gh api repos/o/r/pulls/1/merge -X GET'
+  _case "merge-gate: \$(which git) push de feature → passa" 0 "${mg}" feat '$(which git) push origin feat'
+  # comando acima de 128 KiB: ia ao Python por argv, estourava E2BIG e o fallback vetava texto honesto
+  local _big; _big="$(head -c 140000 /dev/zero | tr '\0' 'a')"
+  _case "merge-gate: comando de 140 KB honesto → passa"    0 "${mg}" feat "echo '${_big}'; git push origin feat"
+  # e a polaridade que prova que o comando grande CHEGA inteiro ao hook (sem ela, o de cima era vazio)
+  _case "merge-gate: comando de 140 KB com merge no fim → VETO" 2 "${mg}" feat "echo '${_big}'; gh pr merge 1"
+  # ── ELENXO, 2ª PASSADA (2026-10-05) ──
+  # B1: a isenção de "outro projeto" decide pelo DESTINO, nunca pelo origin do diretório
+  git -C "${d}/outro-repo" remote add up https://github.com/o/core.git 2>/dev/null || true
+  _case "protect-main: cd outro && push -f <URL nossa> main → VETO" 2 "${pm}" feat "cd ${d}/outro-repo && git push -f https://github.com/o/core.git main"
+  _case "merge-gate: cd outro && push <remoto que aponta p/ nós> HEAD:main → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && git push up HEAD:main"
+  _case "merge-gate: cd outro && GH_REPO=nosso gh pr merge → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && GH_REPO=o/core gh pr merge 1"
+  _case "merge-gate: cd outro && gh api repos/<nosso>/…/merge → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && gh api -X PUT repos/o/core/pulls/1/merge"
+  _case "merge-gate: cd outro && gh api repos/<dele>/…/merge → passa" 0 "${mg}" feat "cd ${d}/outro-repo && gh api -X PUT repos/x/adotante/pulls/1/merge"
+  # B3: pflag aceita a opção COLADA
+  _case "merge-gate: gh api -XPUT …/merge → VETO"          2 "${mg}" feat 'gh api -XPUT repos/o/r/pulls/1/merge'
+  _case "merge-gate: gh api -X=PUT …/merge → VETO"         2 "${mg}" feat 'gh api -X=PUT repos/o/r/pulls/1/merge'
+  _case "merge-gate: …/merges -fbase=main colado → VETO"   2 "${mg}" feat 'gh api repos/o/r/merges -fbase=main -fhead=feat'
+  # B4: o `:` de `${B:-main}` é da expansão, não do refspec
+  _case "protect-main: push -f \"\${B:-main}\" → VETO"     2 "${pm}" feat 'git push -f origin "${B:-main}"'
+  # B5/B6/B7: heredoc lido por shell, apóstrofo no corpo, delimitador com símbolo
+  _case "merge-gate: bash -s -- x <<EOF com merge → VETO"   2 "${mg}" feat $'bash -s -- x <<\'EOF\'\ngh pr merge 1\nEOF'
+  _case "protect-main: sh /dev/stdin <<EOF com push -f → VETO" 2 "${pm}" feat $'sh /dev/stdin <<\'EOF\'\ngit push -f origin main\nEOF'
+  _case "merge-gate: apóstrofo no corpo não esconde \$(…) → VETO" 2 "${mg}" feat $'cat <<EOF > /tmp/n\nit\'s $(gh pr merge 1)\nEOF'
+  _case "merge-gate: delimitador E@F → VETO"               2 "${mg}" feat $'cat <<E@F > /tmp/x\nx\nE@F\ngh pr merge 1'
+  # e a polaridade que SÓ o delimitador inteiro protege: `E` sozinho no corpo não termina `<<E@F`
+  _case "merge-gate: linha E no corpo de <<E@F não termina o heredoc → passa" 0 "${mg}" feat $'cat <<E@F > /tmp/x\nE\ngh pr merge 1\nE@F'
+  _case "merge-gate: heredoc SEM terminador engolindo merge → VETO (fechado)" 2 "${mg}" feat $'cat <<EOF > /tmp/x\nx\ngh pr merge 1'
+  # B8: refspec que vem da CONFIG, e verbos que empurram sem se chamar `push`
+  _case "merge-gate: -c remote.origin.push=…:main push → VETO" 2 "${mg}" feat 'git -c remote.origin.push=+HEAD:refs/heads/main push origin'
+  _case "protect-main: -c remote.origin.mirror=true push → VETO" 2 "${pm}" feat 'git -c remote.origin.mirror=true push origin'
+  _case "protect-main: git config remote.*.push && push -f → VETO" 2 "${pm}" feat 'git config remote.origin.push +HEAD:main && git push -f origin'
+  _case "merge-gate: -c push.default=upstream (upstream = main) → VETO" 2 "${mg}" feat 'git -c branch.feat.merge=refs/heads/main -c push.default=upstream push'
+  _case "protect-main: git send-pack --force … main → VETO" 2 "${pm}" feat 'git send-pack --force https://github.com/o/core.git HEAD:refs/heads/main'
+  _case "merge-gate: git subtree push … main → VETO"       2 "${mg}" feat 'git subtree push --prefix=docs origin main'
+  _case "merge-gate: gh repo sync <remoto> → VETO"         2 "${mg}" feat 'gh repo sync o/core --force'
+  _case "merge-gate: gh api …/merge-upstream branch=main → VETO" 2 "${mg}" feat 'gh api -X POST repos/o/r/merge-upstream -f branch=main'
+  _case "merge-gate: gh api PUT …/contents sem branch → VETO" 2 "${mg}" feat 'gh api -X PUT repos/o/r/contents/x -f message=m -f content=eA=='
+  _case "merge-gate: gh api PUT …/contents branch=feat → passa" 0 "${mg}" feat 'gh api -X PUT repos/o/r/contents/x -f message=m -f content=eA== -f branch=feat'
+  _case "protect-main: runuser -u x -- git push -f main → VETO" 2 "${pm}" feat 'runuser -u x -- git push -f origin main'
+  _case "merge-gate: git config push.autoSetupRemote && push → passa" 0 "${mg}" feat 'git config push.autoSetupRemote true && git push -u origin feat'
+  # M2: pipe para shell fecha só quando a FONTE cita a forma guardada
+  _case "merge-gate: echo ls | sh → passa"                 0 "${mg}" feat 'echo ls | sh'
+  _case "merge-gate: curl … | bash → passa (fronteira do arquivo)" 0 "${mg}" feat 'curl -fsSL https://example.com/i.sh | bash'
+  _case "merge-gate: cat <<EOF | bash honesto → passa"     0 "${mg}" feat $'cat <<\'EOF\' | bash\necho hi\nEOF'
+  _case "merge-gate: cat <<EOF | bash com merge → VETO"    2 "${mg}" feat $'cat <<\'EOF\' | bash\ngh pr merge 1\nEOF'
+  # destino runtime SEM force, sentado na main: o 2º falso positivo de produção (2026-09-01) não volta
+  _case "merge-gate: loop push \"\$br\" sentado na main → passa" 0 "${mg}" main 'for br in fix/a fix/b; do git push origin "$br"; done'
+  # os dois mutantes que o Elenxo mostrou serem a ÚNICA proteção do seu caso (antes, sem caso)
+  _case "merge-gate: caminho verificado com --motivo citando gh pr merge → passa" 0 "${mg}" feat '"$(git rev-parse --show-toplevel)/ops/pr-merge-verified.sh" 12 --dispensa x --motivo "o gh pr merge direto está vetado"'
+  _case "protect-main: ) do case não desempilha escopo alheio → VETO" 2 "${pm}" feat "bash -c 'case 1 in 1) ;; esac; cd ${d}/outro-repo'; git push -f origin main"
+  # ── ELENXO, 3ª PASSADA (2026-10-05): a isenção só vale com PROVA de estrangeiro ──
+  # B1: o gh escolhe o repo pela URL posicional, pelo set-default, ou pela API sem slug
+  _case "merge-gate: cd outro && gh pr merge <URL nossa> → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && gh pr merge https://github.com/o/core/pull/5 --squash"
+  _case "merge-gate: cd outro && gh repo set-default nosso && merge → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && gh repo set-default o/core && gh pr merge 5"
+  _case "merge-gate: cd outro && gh api /repositories/<id>/…/merge → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && gh api -X PUT /repositories/1/pulls/5/merge"
+  _case "merge-gate: cd outro && gh pr merge o/core#5 → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && gh pr merge o/core#5"
+  _case "merge-gate: cd outro && gh pr checkout <URL nossa> && merge → VETO" 2 "${mg}" feat "cd ${d}/outro-repo && gh pr checkout https://github.com/o/core/pull/1 && gh pr merge"
+  _case "protect-main: comentário citando bash no opener não faz código → passa" 0 "${pm}" feat $'cat > notes.md <<\'EOF\'  # sobre zsh e bash\ngit push -f origin main\nEOF'
+  _case "merge-gate: cd outro && gh pr merge 5 → passa (é do outro)" 0 "${mg}" feat "cd ${d}/outro-repo && gh pr merge 5"
+  # B2: nome de remoto com `/` é REMOTO, não caminho; insteadOf reescreve o destino
+  git -C "${d}" remote add a/b https://github.com/o/core.git 2>/dev/null || true
+  _case "protect-main: remoto chamado a/b apontando p/ nós → VETO" 2 "${pm}" feat 'git push -f a/b main'
+  _case "protect-main: -c url.<nosso>.insteadOf=x/y → VETO" 2 "${pm}" feat "cd ${d}/outro-repo && git -c url.https://github.com/o/core.git.insteadOf=x/y push -f x/y main"
+  _case "protect-main: -c remote.x/y.url=<nosso> → VETO" 2 "${pm}" feat "cd ${d}/outro-repo && git -c remote.x/y.url=https://github.com/o/core.git push -f x/y main"
+  # B3: caminho LOCAL nunca isenta (o origin de um adotante pode ser um bare em disco)
+  _case "protect-main: cd outro && push -f <caminho local> main → VETO" 2 "${pm}" feat "cd ${d}/outro-repo && git push -f ${d}/bare.git main"
+  # os casos que SÓ cada cura protege (mutantes que não mordiam sem eles)
+  git -C "${d}/outro-repo" remote add local "${d}" 2>/dev/null || true
+  _case "protect-main: cd outro && push -f <remoto local = nós> main → VETO" 2 "${pm}" feat "cd ${d}/outro-repo && git push -f local main"
+  # remoto com `/` no nome: o git desta máquina aceita, o do runner do CI RECUSA (medido 2026-10-05 — o
+  # `remote add` falhando sob set -e abortava o worker). O caso roda onde a forma existe; onde o git
+  # a recusa, a própria recusa é a medição (e a forma deixa de ser vetor de escape).
+  if git -C "${d}/outro-repo" remote add up/x https://github.com/x/adotante.git 2>/dev/null; then
+    _case "protect-main: cd outro && remoto up/x estrangeiro → passa" 0 "${pm}" feat "cd ${d}/outro-repo && git push -f up/x main"
+  else
+    # a recusa É a medição: onde o git não cria o remoto, `git push up/x` não tem para onde ir (o CI roda
+    # STRICT e um ⊘ aqui reprovaria a faixa — medido no git 2.55 do runner, 2026-10-05)
+    if ! git -C "${d}/outro-repo" remote get-url up/x >/dev/null 2>&1; then
+      record_pass "pretooluse-veto: remoto com / no nome — este git RECUSA criá-lo ($(git --version)), a forma não existe aqui"
+    else
+      record_fail "pretooluse-veto: remoto com / no nome" "remote add falhou mas o remoto existe — preparo inconsistente"
+    fi
+  fi
+  _case "protect-main: -c url.<nosso>.insteadOf=<URL alheia> → VETO" 2 "${pm}" feat "cd ${d}/outro-repo && git -c url.https://github.com/o/core.git.insteadOf=https://github.com/x/fake.git push -f https://github.com/x/fake.git main"
+  _case "merge-gate: cd sem-remoto && gh pr merge → VETO (não se prova)" 2 "${mg}" feat "cd ${d}/sem-remoto && gh pr merge 1"
+  _case "merge-gate: comentário citando pulls/N/merge → passa" 0 "${mg}" feat "gh api repos/o/r/issues/1/comments -f body='rota pulls/12/merge'"
+  _case "merge-gate: …/merges base=\$(…) → VETO" 2 "${mg}" feat 'gh api repos/o/r/merges -f base=$(git branch --show-current) -f head=x'
+  # M2: `cd` que não se segue torna o diretório DESCONHECIDO — nunca cai no cwd do JSON
+  _casew "protect-main: cwd=outro, cd <nós> || exit; push -f main → VETO" 2 "${pm}" feat "${d}/outro-repo" "cd ${d} || exit 1; git push -f origin main"
+  # M3: shell citado entre aspas não faz do corpo do heredoc código
+  _case "merge-gate: 'bash' no --title não faz do --body código → passa" 0 "${mg}" feat $'gh pr create --title "compat com bash 5" --body "$(cat <<\'EOF\'\nnão use `gh pr merge`\nEOF\n)"'
+  # M4: marcas de config/branch padrão só valem onde decidem
+  _case "merge-gate: git config branch.*.remote && push com refspec → passa" 0 "${mg}" feat 'git config branch.feat.remote origin && git push -u origin feat'
+  _case "merge-gate: -c remote.origin.push=feat:feat (literal) → passa" 0 "${mg}" feat 'git -c remote.origin.push=refs/heads/feat:refs/heads/feat push'
+  _case "merge-gate: symbolic-ref noutro comando não marca \$br → passa" 0 "${mg}" feat 'git log $(git symbolic-ref refs/remotes/origin/HEAD)..HEAD; for br in fix/a; do git push origin "$br"; done'
+  _case "merge-gate: B=\$(symbolic-ref…); push \$B → VETO" 2 "${mg}" feat 'B=$(git symbolic-ref --short refs/remotes/origin/HEAD); git push origin "$B"'
+  # M5: rota em TEXTO de campo não é endpoint
+  _case "merge-gate: comentário citando /merges e /contents → passa" 0 "${mg}" feat "gh api repos/o/r/issues/1/comments -f body='veja /merges e /contents/x'"
+  # menor: variável atribuída na própria string chega ao shell do pipe
+  _case "merge-gate: X='gh pr merge 1'; echo \"\$X\" | sh → VETO" 2 "${mg}" feat $'X=\'gh pr merge 1\'; echo "$X" | sh'
+  # B2: o diretório julgado é o `cwd` do JSON. Agente em worktree publicando a branch com a raiz na main:
+  git -C "${d}" worktree add -q "${d}/wt-parent/agent" -b fix/x 2>/dev/null || true
+  _casew "merge-gate: worktree fix/x, raiz na main: push -u origin HEAD → passa" 0 "${mg}" main "${d}/wt-parent/agent" 'git push -u origin HEAD'
+  _casew "merge-gate: worktree fix/x, raiz na main: push nu → passa" 0 "${mg}" main "${d}/wt-parent/agent" 'git push'
+  # M1 (3ª passada): `cd` relativo resolve a partir do cwd do JSON, não da raiz
+  mkdir -p "${d}/wt-parent/agent/docs" || true
+  _casew "merge-gate: worktree fix/x: cd docs && push -u origin HEAD → passa" 0 "${mg}" main "${d}/wt-parent/agent" 'cd docs && git push -u origin HEAD'
+  _casew "protect-main: worktree fix/x: cd docs && push -f origin HEAD → passa" 0 "${pm}" main "${d}/wt-parent/agent" 'cd docs && git push -f origin HEAD'
+  # ── o ANALISADOR por dentro, em modo de diagnóstico: as defesas em camadas tornam um bug dele
+  #    invisível de ponta a ponta (o comando honesto passa mesmo com o Python quebrado), então a
+  #    integridade da pilha de escopo só se prova aqui. Nenhuma das entradas pode virar __ONION_BUG__.
+  local _lib="${REPO_ROOT}/.claude/hooks/lib/invocation-lines.sh" _bug=""
+  local _in
+  for _in in $'X=a bash -c \'case "$X" in a|b) echo "J";; *) echo "I (ok)";; esac\'\nX=b bash -c \'case "$X" in a) echo "J (ok)";; *) echo "I";; esac\'' \
+             "(cd ${d}/outro-repo; (cd /); echo x); git push origin feat" \
+             $'x=$(bash -c \'case 1 in 1) echo a;; esac\'); y=$( (cd /; echo b) ); git log -1'; do
+    _bug="${_bug}$(cd "${d}" && CLAUDE_PROJECT_DIR="${d}" ONION_INVOCATION_STRICT=1 bash -c '. "$1"; onion_invocation_lines "$2"' _ "${_lib}" "${_in}" | grep '^__ONION_BUG__' || true)"
+  done
+  if [ -z "${_bug}" ]; then record_pass "pretooluse-veto: analisador sem bug interno em case/subshell/substituição aninhados (modo estrito)"
+  else record_fail "pretooluse-veto: bug interno do analisador" "${_bug}"; fi
+  # B2, o escape: checkout SENTADO NA MAIN com a raiz noutra branch (por último — a worktree prende a main)
+  git -C "${d}" checkout -q feat 2>/dev/null || true
+  git -C "${d}" worktree add -q "${d}/wt-parent/na-main" main 2>/dev/null || true
+  _casew "protect-main: worktree NA MAIN, raiz na feat: push -f nu → VETO" 2 "${pm}" feat "${d}/wt-parent/na-main" 'git push -f'
+  _casew "merge-gate: worktree NA MAIN, raiz na feat: push origin HEAD → VETO" 2 "${mg}" feat "${d}/wt-parent/na-main" 'git push origin HEAD'
+  git -C "${d}" worktree remove --force "${d}/wt-parent/na-main" 2>/dev/null || true
   # desarme: sem ops/pr-merge-verified.sh (adotante) o gate NÃO veta o único caminho de merge
   rm -f "${d}/ops/pr-merge-verified.sh"
   _case "merge-gate: sem caminho verificado → DESARMA (passa)" 0 "${mg}" feat 'gh pr merge 1'
@@ -7666,6 +8179,905 @@ run_review_verdict_selftests() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# A FORJA DE GUARDAS — o procedimento MAIS REPETIDO desta casa (medido 2026-10-02:
+# 206 familias de bancada, 14 guardas com --selftest proprio) e o unico que estava
+# SEM SUPERFICIE. Esta familia exercita as pecas que podem ser exercitadas: o
+# MEDIDOR (censo), a presenca da doutrina, e a delegacao do selftest da guarda que
+# nasceu junto. A peca que NAO se exercita aqui e o MUTANTE — nenhum script sabe
+# detecta-lo, e a doutrina assume isso em letra grande (clausula 2).
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# PROMOÇÃO DE PAPEL — o pin NÃO muda quando o papel muda, e isso veio de sinal de
+# campo (adotante hub, 2026-10-02). O snippet do `--promote-hub` carimbava
+# `git -C "$REPO" rev-parse --short=12 HEAD` — o HEAD DO ADOTANTE, que não existe na
+# história do core: o `pin-integrity-check` do `--update` seguinte acusaria pin
+# inválido e o carimbo MENTIRIA sobre a versão do framework. O adotante contornou à
+# mão e PEDIU o selftest; é este.
+# ⚠️ A 1ª tentativa de cura falhou por ORDEM — o fallback ficou DEPOIS da cobrança de
+# `--commit`, então `--role hub` sozinho seguia saindo rc=2 sem escrever. Só o dogfood
+# pegou (rc=2 antes e depois, stamp intacto). O caso (b) ancora a ordem por EXECUÇÃO.
+# ---------------------------------------------------------------------------
+# ── MEDIDOR QUE CORTA OU ZERA EM SILENCIO ────────────────────────────────────────────────────
+# DEFEITO DATADO (2026-10-03, duas ocorrencias no mesmo dia, ambas contra mim):
+#  (1) `forge-census.sh --markdown` tinha `head -12` LITERAL e imprimia 12 de 59 candidatos sem
+#      dizer. Uma sessao leu a projecao, nao viu o /meta:evolve nela, e selou numa migalha que ele
+#      tinha "0 de 7 pecas, ausente do censo inteiro". O `--tsv` dizia 2/7, empatado com 12 outros,
+#      com 37 candidatos ABAIXO dele. Ausencia-por-CORTE e indistinguivel de ausencia-por-ZERO.
+#  (2) `kg-corpus-grep.sh "frase entre aspas"` casava a frase INTEIRA como UM termo e devolvia
+#      `0 no(s)` sobre 120 grafos — um zero que se le como "o corpus nao sabe nada disto".
+# A CLAUSULA COMUM, e ela ja estava escrita no proprio forge-census: *zero NAO e resultado*. Um
+# medidor que corta ou zera tem de dizer QUE cortou e o que o zero pode significar; quem le nao
+# pode ser obrigado a comparar 12 com 59 de cabeca, porque leitor nao e mecanismo.
+# ESTA FAMILIA TESTA OS ARTEFATOS DA ARVORE VIVA (sem `git archive`, sem copia do predicado para
+# dentro do caso): o (a)/(b) rodam o censo real no repo real variando so o teto por env, e o
+# (c)/(d) rodam o corpus-grep real com corpus plantado por ONION_KG_CORPUS_FILES.
+# ── REGRA 96: diretiva injetada que corta listagem em silencio ───────────────────────────────
+# A familia DELEGA ao `--selftest` do proprio check (14 casos la, incluindo as seis formas de
+# truncar e a isencao de valor unico) e acrescenta o que so daqui se ve: o MODO QUE A PRODUCAO
+# CONSOME. O molde avisa disso no comentario da l.6 dele — um caso vivia DEPOIS do `exit` do ramo
+# TSV, e TSV e exatamente o modo que o lint invoca: modo humano reprovava, modo TSV saia 0 e vazio.
+
+# ── /meta:evolve — o raio-X (peça 3) ──────────────────────────────────────────────────────────
+# ⚠️ OS CASOS AFIRMAM FORMA, NUNCA O ESTADO DO REPO VIVO. Foi o defeito FATAL da REGRA 97, forjada
+#    no mesmo dia: casos que afirmavam sobre o repo vivo faziam a bancada falhar quando alguém
+#    OBEDECIA à guarda, e o adotante nascia vermelho. Aqui o raio-X roda no repo real só para cobrar
+#    que as SEIS seções existem; tudo que depende de VALOR roda em sandbox com medidores falsos.
+# ⚠️ E A 1ª VERSÃO DESTA FAMÍLIA FOI REPROVADA (Elenxo, 2026-10-04): o raio-X publicava números
+#    FALSOS com cara de certos ("1 vencida" vindo da legenda; "✅ fresca" com o medidor quebrado;
+#    medidor rc=1/2 virando zero) e o caso (d) — que se chamava "nunca zero" — não afirmava zero
+#    nenhum, então o mutante que fazia NAO-MEDIDO emitir 0 SOBREVIVIA. Os casos (g)–(i) nasceram
+#    dessa reprovação, um por número falso.
+_evc_sandbox() {   # cria um repo de medidores FALSOS; $1 = dir. Devolve via arquivos.
+  local d="$1"; mkdir -p "${d}/.claude/validation" "${d}/docs/onion/graph"
+  cp "${REPO_ROOT}/.claude/validation/evolve-census.sh" "${d}/.claude/validation/"
+  ( cd "${d}" && git init -q . ) >/dev/null 2>&1
+}
+# PEÇA 4 DO /meta:evolve (2026-10-04) — o workflow da rodada, persistido. Roda o CORPO com agent()
+# simulado (0 tokens), no mesmo embrulho async do runtime. Os casos cobram o que a superfície
+# PROMETE do script: recusar D4/D5/D9/D10 (composição do contexto principal), não inventar alvos
+# da MAQ sem o raio-X, e tirar o refutado POR ID.
+run_evolve_workflow_selftests() {
+  local wf="${REPO_ROOT}/.claude/workflows/evolve.js"
+  if [ ! -f "${wf}" ]; then record_fail "evolve-workflow" "ausente: .claude/workflows/evolve.js"; return; fi
+  if ! command -v node >/dev/null 2>&1; then record_skip "evolve-workflow: node ausente"; return; fi
+  local _sc=0; bash "${REPO_ROOT}/.claude/validation/workflow-syntax-check.sh" "${wf}" >/dev/null 2>&1 || _sc=$?
+  if [ "${_sc}" -eq 0 ]; then record_pass "evolve-workflow: (a) sintaxe valida no embrulho do runtime"
+  else record_fail "evolve-workflow: (a) sintaxe" "workflow-syntax-check rc=${_sc}"; return; fi
+  local d; d="$(mktemp -d)"
+  # STUB: cada scan devolve 3 achados — dois blocker (indices 0 e 1) e um opportunistic (2). O juiz
+  # refuta SO o indice 1: assim correlacionar por indice em vez de id, ou nao filtrar nada, REPROVA
+  # (a 1a versao refutava o indice 0 e os dois mutantes passavam — o Elenxo provou o caso decorativo).
+  # MODE: '' normal · 'null-verdict' juiz devolve null · 'throw-D2' o scan de D2 lanca.
+  _evw_run() {   # $1 = args JSON, $2 = MODE; imprime {r, calls, logs, schemas_ok}
+    { printf 'const args=%s;const MODE=%s;const CALLS=[];const SCH=[];\n' "$1" "\"$2\""
+      printf '%s\n' 'const agent=async(p,o)=>{CALLS.push(o.label);if(o.schema)SCH.push(o.schema);if(o.label.startsWith("scan:")){if(MODE==="throw-D2"&&o.label==="scan:D2")throw new Error("boom");return{total_seen:3,findings:[0,1,2].map(i=>({severity:i<2?"blocker":"opportunistic",finding:"f"+i,evidence:"e",target_artifact:"t",effort:"S",exec_command:"x"}))}}if(MODE==="null-verdict")return null;return{refuted:/-1$/.test(o.label),vetoed_phase_merge:false,reasoning:"r"}};'
+      printf '%s\n' 'const pipeline=async(items,...st)=>Promise.all(items.map(async(i,ix)=>{try{let r=i;for(const f of st)r=await f(r,i,ix);return r}catch(e){return null}}));const parallel=async(th)=>Promise.all(th.map(async t=>{try{return await t()}catch(e){return null}}));const phase=()=>{};const LOGS=[];const log=(m)=>LOGS.push(m);'
+      printf '%s\n' 'const sub=(o)=>!o||typeof o!=="object"?true:((o.required||[]).every(k=>o.properties&&k in o.properties)&&Object.values(o.properties||{}).every(sub)&&sub(o.items));'
+      printf '(async()=>{\n'; awk 'f{print} /^}$/ && !f {f=1}' "${wf}"
+      printf '\n})().then(r=>console.log(JSON.stringify({r,calls:CALLS.length,logs:LOGS,schemas_ok:SCH.length>0&&SCH.every(sub)})));\n'; } > "${d}/run.mjs"
+    node "${d}/run.mjs" 2>&1
+  }
+  local _o
+  _o="$(_evw_run '{"dims":["D4"]}' '')"
+  if grep -q '"error":"dimensão D4 é composição' <<< "${_o}" && grep -q '"calls":0' <<< "${_o}"; then
+    record_pass "evolve-workflow: (b) D4 RECUSADO sem gastar agente (composicao e do contexto principal)"
+  else record_fail "evolve-workflow: (b) D4" "${_o:0:200}"; fi
+  _o="$(_evw_run '{}' '')"
+  if grep -q '"skipped":\["MAQ"\]' <<< "${_o}" && grep -q 'MAQ: sem maqTargets' <<< "${_o}" && ! grep -q '"d":"MAQ"' <<< "${_o}"; then
+    record_pass "evolve-workflow: (c) sem o raio-X a MAQ NAO roda e sai em skipped (nunca alvo inventado)"
+  else record_fail "evolve-workflow: (c) MAQ sem alvos" "${_o:0:240}"; fi
+  # (d) o refutado sai POR ID: D1-1 em refuted e AUSENTE de survived; D1-0 julgado e vivo
+  _o="$(_evw_run '{"dims":["D1"]}' '')"
+  local _surv; _surv="$(python3 -c 'import json,sys;d=json.load(sys.stdin)["r"];print(" ".join(f["id"] for f in d["survived"]),"|"," ".join(f["id"] for f in d["refuted"]))' <<< "${_o}" 2>&1)"
+  if [ "${_surv}" = "D1-0 D1-2 | D1-1" ]; then
+    record_pass "evolve-workflow: (d) refutado sai POR ID (D1-1 fora de survived; D1-0 julgado e vivo; D1-2 opportunistic sem juiz)"
+  else record_fail "evolve-workflow: (d) correlacao por id" "survived|refuted = [${_surv}]"; fi
+  # (e) juiz que devolve null NAO vira sobrevivente: cai em unjudged, e o log diz SEM JUIZ
+  _o="$(_evw_run '{"dims":["D1"]}' 'null-verdict')"
+  _surv="$(python3 -c 'import json,sys;d=json.load(sys.stdin)["r"];print(" ".join(f["id"] for f in d["survived"]),"|"," ".join(f["id"] for f in d["unjudged"]))' <<< "${_o}" 2>&1)"
+  if [ "${_surv}" = "D1-2 | D1-0 D1-1" ] && grep -q 'SEM JUIZ: 2' <<< "${_o}"; then
+    record_pass "evolve-workflow: (e) veredito null cai em unjudged (nunca sobrevivente silencioso)"
+  else record_fail "evolve-workflow: (e) juiz null" "survived|unjudged = [${_surv}]"; fi
+  # (f) scan que LANCA aparece em lost, com log — nunca some
+  _o="$(_evw_run '{"dims":["D1","D2"]}' 'throw-D2')"
+  if grep -q '"lost":\["D2"\]' <<< "${_o}" && grep -q 'D2: o worker LANÇOU' <<< "${_o}"; then
+    record_pass "evolve-workflow: (f) dimensao cujo worker lanca sai em lost, declarada"
+  else record_fail "evolve-workflow: (f) scan que lanca" "${_o:0:300}"; fi
+  # (g) entrada ruim RECUSA (args string valido e parseado; cap invalido recusa) e schemas tem required ⊆ properties
+  _o="$(_evw_run '"{\"dims\":[\"d1\"]}"' '')"
+  local _g=0
+  grep -q '"d":"D1"' <<< "${_o}" && grep -q '"schemas_ok":true' <<< "${_o}" && ! grep -q '"d":"D2"' <<< "${_o}" || _g=1
+  _o="$(_evw_run '{"cap":0}' '')"; grep -q '"error":"cap tem de ser inteiro' <<< "${_o}" || _g=1
+  grep -qE 'Date\.now|Math\.random|new Date\(\)' "${wf}" && _g=1
+  if [ "${_g}" -eq 0 ]; then record_pass "evolve-workflow: (g) args string parseado (d1 normalizado), cap invalido recusa, schemas consistentes, sem relogio"
+  else record_fail "evolve-workflow: (g) entrada/schema" "${_o:0:200}"; fi
+  rm -rf "${d}"
+}
+
+run_evolve_census_selftests() {
+  local cen="${REPO_ROOT}/.claude/validation/evolve-census.sh"
+  if [ ! -f "${cen}" ]; then record_fail "evolve-census" "medidor ausente: evolve-census.sh"; return; fi
+
+  # (a) o raio-X roda e emite as SETE seções (a 7ª, CONFRONTO, nasceu da reprovação: a 1ª versão
+  #     anunciava confronto e nenhuma linha cruzava dimensões).
+  local _o _rc=0
+  _o="$(cd "${REPO_ROOT}" && bash "${REPO_ROOT}/.claude/validation/evolve-census.sh" . --markdown 2>&1)" || _rc=$?
+  local _sec=0 _s
+  for _s in '## 1. PEÇAS' '## 2. GUARDAS' '## 3. DISSECAÇÕES' '## 4. DOUTRINA QUE CARREGA' '## 5. PLANO' '## 6. A IDADE' '## 7. CONFRONTO'; do
+    grep -qF "${_s}" <<< "${_o}" && _sec=$((_sec+1))
+  done
+  if [ "${_rc}" -eq 0 ] && [ "${_sec}" -eq 7 ]; then
+    record_pass "evolve-census: (a) o raio-X roda e emite as 7 secoes (com o CONFRONTO)"
+  else record_fail "evolve-census: (a) secoes" "rc=${_rc}; secoes=${_sec}/7"; fi
+
+  # (b) a distinção carregou≠aterrissou e a lista do não-medido estão na saída. ⚠️ Este caso grepa
+  #     texto que o próprio script imprime — o Elenxo o chamou de tautológico, e é: ele só prova que
+  #     a frase NÃO FOI APAGADA. Fica, com o nome dizendo isso; o rigor está em (d), (g), (h), (i).
+  if grep -q 'CARREGOU ≠ ATERRISSOU' <<< "${_o}" && grep -q 'O QUE NÃO FOI MEDIDO' <<< "${_o}"; then
+    record_pass "evolve-census: (b) a saida mantem a distincao carregou!=aterrissou e a lista do nao-medido (presenca de texto)"
+  else record_fail "evolve-census: (b) declaracao" "a distincao ou a lista do nao-medido sumiu da saida"; fi
+
+  # (c) FAIL-LOUD: sem os medidores, recusa (exit 3) — nunca um raio-X vazio que pareça limpo.
+  local d; d="$(mktemp -d)"
+  local _c _crc=0
+  _c="$(bash "${REPO_ROOT}/.claude/validation/evolve-census.sh" "${d}" --markdown 2>&1)" || _crc=$?
+  if [ "${_crc}" -eq 3 ] && grep -q 'Recuso' <<< "${_c}"; then
+    record_pass "evolve-census: (c) sem medidores RECUSA com exit 3 (varredor cego nunca vira quadro limpo)"
+  else record_fail "evolve-census: (c) fail-loud" "rc=${_crc}; saida=[${_c}]"; fi
+  rm -rf "${d}"
+
+  # (d) NUNCA ZERO: medidor que falha (rc=2, o meio-termo que a 1ª versão engolia) faz a dimensão
+  #     sair `?` — e o caso AFIRMA que o número da seção NÃO é 0, que é o que o nome promete.
+  d="$(mktemp -d)"; _evc_sandbox "${d}"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "${d}/.claude/validation/guard-census.sh"
+  local _dd; _dd="$(cd "${d}" && bash .claude/validation/evolve-census.sh . --markdown 2>&1 || true)"
+  if grep -qE '^  \? com selftest' <<< "${_dd}" && ! grep -qE '^  0 com selftest' <<< "${_dd}" \
+     && grep -q 'guardas — NAO-MEDIDO: guard-census.sh saiu rc=2' <<< "${_dd}"; then
+    record_pass "evolve-census: (d) medidor com rc=2 vira '?' na secao e NAO-MEDIDO na lista — nunca zero"
+  else record_fail "evolve-census: (d) nunca zero" "a secao de guardas virou numero ou o rc sumiu: [$(grep -A1 '2. GUARDAS' <<< "${_dd}")]"; fi
+
+  # (e) AUSENTE é nomeado e distinto de NAO-MEDIDO (no mesmo sandbox, forge-census nem existe).
+  if grep -q 'pecas — AUSENTE: forge-census.sh' <<< "${_dd}" && grep -qE '^  \? candidatos' <<< "${_dd}"; then
+    record_pass "evolve-census: (e) medidor AUSENTE e nomeado e a secao sai '?' (distinto de nao-mediu)"
+  else record_fail "evolve-census: (e) ausente" "[$(grep -E 'AUSENTE|candidatos' <<< "${_dd}" | head -3)]"; fi
+  rm -rf "${d}"
+
+  # (f) --tsv: cabeçalho fixo, 3 colunas em TODA linha, e a lista do não-medido EXISTE nele — a 1ª
+  #     versão não a tinha, e no tsv tudo que falhava virava 0.
+  d="$(mktemp -d)"; _evc_sandbox "${d}"
+  local _t; _t="$(cd "${d}" && bash .claude/validation/evolve-census.sh . --tsv 2>&1 || true)"
+  if [ "$(head -1 <<< "${_t}")" = "$(printf 'dimensao\tmetrica\tvalor')" ] \
+     && [ "$(awk -F'\t' 'NF!=3' <<< "${_t}" | grep -c .)" = "0" ] \
+     && grep -q '^nao_medido	' <<< "${_t}" && ! grep -qE '^pecas	candidatos	0$' <<< "${_t}"; then
+    record_pass "evolve-census: (f) --tsv: 3 colunas, lista nao_medido presente, e dimensao nao-medida sai '?' (nunca 0)"
+  else record_fail "evolve-census: (f) tsv" "[$(head -4 <<< "${_t}")]"; fi
+  rm -rf "${d}"
+
+  # (g) VERDE FALSO: medidor de idade QUEBRADO (rc=2) nunca produz ✅. A 1ª versão imprimia
+  #     "✅ auto-auditoria fresca" porque a contagem de sinais dava zero sobre saída vazia.
+  d="$(mktemp -d)"; _evc_sandbox "${d}"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "${d}/.claude/validation/evolve-staleness-check.sh"
+  local _g; _g="$(cd "${d}" && bash .claude/validation/evolve-census.sh . --markdown 2>&1 || true)"
+  if ! grep -q '✅ auto-auditoria fresca' <<< "${_g}" && grep -q 'NÃO MEDIDA' <<< "${_g}"; then
+    record_pass "evolve-census: (g) medidor de idade quebrado NUNCA imprime ✅ (verde sem medicao e o pior verde)"
+  else record_fail "evolve-census: (g) verde falso" "[$(grep -A1 '## 6' <<< "${_g}")]"; fi
+
+  # (h) e o PAR de (g): rc=1 do medidor de idade é "achei sinal", NÃO falha — sem este par, a cura
+  #     de (g) poderia tratar todo rc≠0 como quebrado e esconder a auditoria vencida.
+  printf '#!/usr/bin/env bash\nprintf "SOFT\\tEVOLVE-VENCIDO\\tdocs/analysis\\tx\\n"; exit 1\n' > "${d}/.claude/validation/evolve-staleness-check.sh"
+  local _h; _h="$(cd "${d}" && bash .claude/validation/evolve-census.sh . --markdown 2>&1 || true)"
+  if grep -q '1 sinal(is): EVOLVE-VENCIDO' <<< "${_h}" && ! grep -q 'idade — NAO-MEDIDO' <<< "${_h}"; then
+    record_pass "evolve-census: (h) rc=1 do medidor de idade e SINAL, nao falha (o par de (g))"
+  else record_fail "evolve-census: (h) rc semantico" "[$(grep -A1 '## 6' <<< "${_h}")]"; fi
+  rm -rf "${d}"
+
+  # (i) DISSECAÇÃO VENCIDA pela COLUNA, nunca pela legenda: um dissect-census falso com a palavra
+  #     VENCIDO na legenda e UMA linha `fresco` tem de dar 0 vencidas. Era o número falso que chegou
+  #     a um nó de grafo.
+  d="$(mktemp -d)"; _evc_sandbox "${d}"
+  cat > "${d}/.claude/validation/dissect-census.sh" <<'FAKE'
+#!/usr/bin/env bash
+echo "# censo de dissecações · 1 grafo(s) rastreado(s) · 1 dissecação(ões) declarada(s)"
+echo "ferramenta | nível | veredito | baseline | review_after | frescor"
+echo "cedar | N3 | parquear | 2026-10-01 | 2026-10-31 | fresco"
+echo "(VENCIDO não se cita como se fosse de hoje)"
+FAKE
+  local _i; _i="$(cd "${d}" && bash .claude/validation/evolve-census.sh . --markdown 2>&1 || true)"
+  if grep -q '1 declarada(s) · 0 vencida(s)' <<< "${_i}"; then
+    record_pass "evolve-census: (i) vencida contada pela COLUNA frescor — a legenda com 'VENCIDO' nao conta"
+  else record_fail "evolve-census: (i) legenda" "[$(grep 'declarada' <<< "${_i}")]"; fi
+  rm -rf "${d}"
+
+  # (j) SKILL NAO-MEDIVEL vai para O QUE NÃO FOI MEDIDO, nunca para os ALVOS. O raio-X da rodada de
+  #     2026-10-04 publicou 2 skills como "nunca casou" — o hook de carga é cego para skills.
+  d="$(mktemp -d)"; _evc_sandbox "${d}"; mkdir -p "${d}/.claude/skills/s" "${d}/.claude/rules"
+  : > "${d}/.claude/skills/s/SKILL.md"; : > "${d}/.claude/rules/r.md"
+  cat > "${d}/.claude/validation/instructions-loaded-census.sh" <<'FAKE'
+#!/usr/bin/env bash
+printf 'file\tsessions\tsession_start\tpath_glob_match\tinclude\tnested_traversal\tcompact\tcandidata\n'
+printf '.claude/skills/s/SKILL.md\t0\t0\t0\t0\t0\t0\tNAO-MEDIVEL\n'
+printf '.claude/rules/r.md\t0\t0\t0\t0\t0\t0\tNUNCA\n'
+FAKE
+  local _j; _j="$(cd "${d}" && bash .claude/validation/evolve-census.sh . --markdown 2>&1 || true)"
+  local _targets; _targets="$(sed -n '/## 7. CONFRONTO/,/## O QUE/p' <<< "${_j}")"
+  if grep -q 'NAO-MEDIVEL: 1 skill' <<< "${_j}" && grep -q 'rules/r.md' <<< "${_targets}" && ! grep -q 'skills/s/SKILL.md' <<< "${_targets}"; then
+    record_pass "evolve-census: (j) skill NAO-MEDIVEL sai em 'nao medido', nunca como alvo; a rule NUNCA segue alvo"
+  else record_fail "evolve-census: (j) skill cega" "$(grep -E 'NAO-MEDIVEL|SKILL|r.md' <<< "${_j}" | tr '\n' '|' | cut -c1-300)"; fi
+  rm -rf "${d}"
+}
+
+# ── REGRA 97: a auto-auditoria do framework tem GATILHO ──────────────────────────────────────
+# Delega ao `--selftest` do check (7 casos, incluindo as duas polaridades e o par pasta-ausente vs
+# pasta-vazia) e acrescenta o que só daqui se vê: o MODO QUE A PRODUÇÃO CONSOME (`--tsv`) e o
+# REGISTRO. ⚠️ Invoca pelo CAMINHO LITERAL, não por variável: a REGRA 59 (Modo que a produção
+# consome é exercitado pela bancada) extrai o par casando o NOME do arquivo, e `bash "${v}" --tsv`
+# a deixa cega — ela acusou MODO-SEM-TESTE com o caso existindo e passando, na forja da irmã desta.
+run_evolve_staleness_selftests() {
+  local chk="${REPO_ROOT}/.claude/validation/evolve-staleness-check.sh"
+  if [ ! -f "${chk}" ]; then record_fail "evolve-staleness" "guarda ausente: evolve-staleness-check.sh"; return; fi
+
+  local _o _rc=0
+  _o="$(cd "${REPO_ROOT}" && LC_ALL=C bash "${REPO_ROOT}/.claude/validation/evolve-staleness-check.sh" --selftest 2>&1)" || _rc=$?
+  if [ "${_rc}" -eq 0 ] && grep -qE '[0-9]+ passaram, 0 falharam' <<< "${_o}"; then
+    record_pass "evolve-staleness: (a) --selftest proprio verde (idade, delta, nunca-rodou, opt-in, data ilegivel, git ausente)"
+  else record_fail "evolve-staleness: (a) --selftest" "rc=${_rc}; saida=[${_o}]"; fi
+
+  # (b) o ramo que a producao consome EMITE no formato do dispatcher: 4 campos, SOFT primeiro.
+  # ⚠️ FIXTURE SINTETIZADA, nunca o repo vivo. A 1a versao afirmava `rc=1` sobre o REPO REAL, e o
+  #    Elenxo provou o estrago: bastava RODAR o /meta:evolve para este caso FALHAR — a bancada
+  #    PUNIA QUEM OBEDECIA a guarda. E como o runner sai 1 com qualquer FAIL, o "SOFT por desenho"
+  #    virava bloqueio. Caso que depende do estado do repo nao e caso, e aposta.
+  local _fx; _fx="$(mktemp -d)"
+  mkdir -p "${_fx}/docs/analysis"
+  printf '# r\n' > "${_fx}/docs/analysis/onion-evolution-2026-01-01.md"
+  local _t _trc=0
+  _t="$(cd "${REPO_ROOT}" && EVOLVE_ANALYSIS_DIR="${_fx}/docs/analysis" bash "${REPO_ROOT}/.claude/validation/evolve-staleness-check.sh" "${_fx}" --tsv 2>&1)" || _trc=$?
+  if [ "${_trc}" -eq 1 ] && [ "$(awk -F'\t' 'NR==1{print NF}' <<< "${_t}")" = "4" ] \
+     && grep -qE '^SOFT	EVOLVE-' <<< "${_t}"; then
+    record_pass "evolve-staleness: (b) modo --tsv emite 4 campos SOFT/EVOLVE-* sobre FIXTURE (o formato que o dispatcher le)"
+  else record_fail "evolve-staleness: (b) modo tsv" "rc=${_trc}; saida=[${_t}]"; fi
+
+  # (b2) O PAR DE (b), e e o caso que o Elenxo mostrou faltar: com relatorio de HOJE a guarda
+  #      CALA e sai 0. Sem este caso, nada impede a guarda de voltar a punir quem obedece.
+  # ⚠️ A FIXTURE TEM DE SER REPO GIT: sem isso a perna (2) declara `DELTA-NAO-MEDIDO` — comportamento
+  #    CERTO — e o caso confundiria "nao calou por defeito" com "nao calou por fixture incompleta".
+  #    Foi o proprio (b2) que pegou isto na 1a execucao dele, que e o que um caso novo deve fazer.
+  local _fx2; _fx2="$(mktemp -d)"; mkdir -p "${_fx2}/docs/analysis"
+  ( cd "${_fx2}" && git init -q . \
+    && git -c user.email=b@b -c user.name=b commit -q --allow-empty -m base ) >/dev/null 2>&1
+  printf '# r\n' > "${_fx2}/docs/analysis/onion-evolution-$(LC_ALL=C date +%Y-%m-%d).md"
+  ( cd "${_fx2}" && git add -A && git -c user.email=b@b -c user.name=b commit -q -m r ) >/dev/null 2>&1
+  local _t2 _t2rc=0
+  _t2="$(cd "${REPO_ROOT}" && EVOLVE_ANALYSIS_DIR="${_fx2}/docs/analysis" bash "${REPO_ROOT}/.claude/validation/evolve-staleness-check.sh" "${_fx2}" --tsv 2>&1)" || _t2rc=$?
+  if [ "${_t2rc}" -eq 0 ] && [ -z "${_t2}" ]; then
+    record_pass "evolve-staleness: (b2) com auditoria de HOJE a guarda CALA e sai 0 (nao pune quem obedece)"
+  else record_fail "evolve-staleness: (b2) pune a conformidade" "rc=${_t2rc}; saida=[${_t2}]"; fi
+  rm -rf "${_fx}" "${_fx2}"
+
+  # (c) REGISTRO (peca 6): guarda exercitada e nao registrada nunca dispara.
+  if grep -q 'check_evolve_staleness$' "${REPO_ROOT}/.claude/validation/lint-artifacts.sh" \
+     && grep -q 'REGRA 97' "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"; then
+    record_pass "evolve-staleness: (c) registrada no dispatcher do lint-artifacts (peca 6)"
+  else record_fail "evolve-staleness: (c) registro" "a guarda nao esta no dispatcher — exercitada e muda"; fi
+
+  # (d) A REGRA 97 e SOFT por DESENHO. Se um dia virar HARD, auto-auditoria vencida passaria a
+  #     BLOQUEAR merge — e o laco de auto-evolucao travaria a propria entrega. O caso fixa isso.
+  # (d) SEVERIDADE SOFT, interrogando A SAIDA DA GUARDA.
+  # ⚠️ A 1a versao era TAUTOLOGICA: ela grepava uma CONSTANTE FABRICADA (`printf 'HARD\tx...'`),
+  #    verdadeira para qualquer estado da guarda — o Elenxo provou que o mutante SOFT->HARD
+  #    SOBREVIVIA a ela. Caso que interroga a propria fixture em vez do SUT e enfeite com
+  #    aparencia de rigor, e e a classe mais caruna desta casa.
+  local _fx3; _fx3="$(mktemp -d)"; mkdir -p "${_fx3}/docs/analysis"
+  printf '# r\n' > "${_fx3}/docs/analysis/onion-evolution-2026-01-01.md"
+  local _sev
+  # extracao em posicao PROTEGIDA: o runner roda sob `set -euo pipefail`, e um pipe que devolve
+  # nao-zero MATA A SUITE em vez de reprovar o caso (foi o que aconteceu na 1a execucao).
+  _sev=""
+  if ! _sev="$( (cd "${REPO_ROOT}" && EVOLVE_ANALYSIS_DIR="${_fx3}/docs/analysis" bash "${REPO_ROOT}/.claude/validation/evolve-staleness-check.sh" "${_fx3}" --tsv 2>&1 || true) | awk -F'\t' 'NR==1{print $1}' )"; then _sev=""; fi
+  rm -rf "${_fx3}"
+  if [ "${_sev}" = "SOFT" ]; then
+    record_pass "evolve-staleness: (d) a guarda EMITE SOFT (vencida AVISA; HARD travaria o laco de auto-evolucao)"
+  else record_fail "evolve-staleness: (d) severidade" "a guarda emitiu '${_sev}' em vez de SOFT — auto-auditoria vencida passaria a BLOQUEAR merge"; fi
+}
+
+run_cited_directive_selftests() {
+  local chk="${REPO_ROOT}/.claude/validation/cited-directive-check.sh"
+  if [ ! -f "${chk}" ]; then record_fail "cited-directive" "guarda ausente: cited-directive-check.sh"; return; fi
+  if ! command -v node >/dev/null 2>&1; then record_skip "cited-directive: node ausente"; return; fi
+  # (a) o --selftest proprio (as duas polaridades, verbatim do dano de 2026-10-04). Delegacao.
+  local _o _rc=0
+  _o="$(cd "${REPO_ROOT}" && LC_ALL=C bash "${chk}" --selftest 2>&1)" || _rc=$?
+  if [ "${_rc}" -eq 0 ] && grep -qE '[0-9]+ passaram, 0 falharam' <<< "${_o}"; then
+    record_pass "cited-directive: (a) --selftest proprio verde (crase dupla e bloco cercado acusados; diretiva real calada)"
+  else record_fail "cited-directive: (a) --selftest" "rc=${_rc}; saida=[${_o}]"; fi
+  # (b) O MODO QUE A PRODUCAO CONSOME: --tsv no repo real sai 0 e silencioso (passivo zero).
+  #     CAMINHO LITERAL, nao variavel: a REGRA 59 casa o NOME do arquivo para achar o par.
+  local _t _trc=0
+  _t="$(cd "${REPO_ROOT}" && bash "${REPO_ROOT}/.claude/validation/cited-directive-check.sh" "${REPO_ROOT}" --tsv 2>&1)" || _trc=$?
+  if [ "${_trc}" -eq 0 ] && [ -z "${_t}" ]; then
+    record_pass "cited-directive: (b) modo --tsv sai 0 e silencioso no repo real"
+  else record_fail "cited-directive: (b) modo tsv" "rc=${_trc}; saida=[${_t}]"; fi
+  # (c) o ramo tsv EMITE 4 campos HARD/REGRA98 num repo com o defeito — sem isto, o silencio de (b)
+  #     poderia ser o ramo inteiro morto. A fixture e o create-skill de main, l.219, verbatim.
+  local sd; sd="$(mktemp -d)"; mkdir -p "${sd}/.claude/commands/meta"
+  printf '```markdown\n## Mudancas atuais\n\n!`git diff HEAD`\n```\n' > "${sd}/.claude/commands/meta/zz.md"
+  ( cd "${sd}" && git init -q . && git add -A ) >/dev/null 2>&1
+  local _e _erc=0
+  _e="$(cd "${REPO_ROOT}" && bash "${REPO_ROOT}/.claude/validation/cited-directive-check.sh" "${sd}" --tsv 2>&1)" || _erc=$?
+  if [ "${_erc}" -eq 1 ] && [ "$(awk -F'\t' 'NR==1{print NF}' <<< "${_e}")" = "4" ] && grep -q '^HARD	REGRA98	' <<< "${_e}"; then
+    record_pass "cited-directive: (c) ramo tsv emite 4 campos HARD/REGRA98 sobre o defeito verbatim"
+  else record_fail "cited-directive: (c) formato tsv" "rc=${_erc}; saida=[${_e}]"; fi
+  # (d) O CAMINHO DE PRODUCAO: o lint-artifacts real, num repo com o defeito, emite a REGRA 98. Sem
+  #     isto, comentar a chamada do dispatcher deixava a familia verde (F7 do Elenxo).
+  cp -a "${SANDBOX}/.claude" "${sd}/" 2>/dev/null; mkdir -p "${sd}/.claude/commands/meta"
+  printf '```markdown\n!`git diff HEAD`\n```\n' > "${sd}/.claude/commands/meta/zz.md"
+  ( cd "${sd}" && git init -q . 2>/dev/null; git add -A ) >/dev/null 2>&1
+  local _l; _l="$(cd "${sd}" && LC_ALL=C bash .claude/validation/lint-artifacts.sh --only="${sd}/.claude/commands/meta/zz.md" 2>&1 || true)"
+  if grep -q 'REGRA 98 (Diretiva de injeção escrita como CITAÇÃO não pode estar VIVA)' <<< "${_l}"; then
+    record_pass "cited-directive: (d) o lint de producao (dispatcher) emite a REGRA 98 sobre o defeito"
+  else record_fail "cited-directive: (d) dispatcher" "$(grep -E 'REGRA 98|MORREU|HARD' <<< "${_l}" | head -3 | tr '\n' '|')"; fi
+  # (e) motor que MORRE (node que sai 1) e HARD pelo dispatcher, nunca aprovacao calada (F6)
+  local _fb; _fb="$(mktemp -d)"; printf '#!/bin/sh\nexit 1\n' > "${_fb}/node"; chmod +x "${_fb}/node"
+  local _m _mrc=0; _m="$(PATH="${_fb}:${PATH}" bash "${REPO_ROOT}/.claude/validation/cited-directive-check.sh" "${sd}" --tsv 2>/dev/null)" || _mrc=$?
+  rm -rf "${_fb}"
+  if [ "${_mrc}" -eq 2 ] && grep -q '^HARD	SEM-MOTOR	' <<< "${_m}"; then record_pass "cited-directive: (e) motor que morre sai rc=2 com HARD SEM-MOTOR por stdout"
+  else record_fail "cited-directive: (e) motor morto" "rc=${_mrc}; [${_m}]"; fi
+  rm -rf "${sd}"
+  # (f) PARIDADE COM O BINARIO, nos DOIS lados: cada trecho literal tem de estar no binario INSTALADO
+  #     (deriva do Claude Code) E na guarda (deriva da copia). A 1a redacao so olhava o binario, e
+  #     mutar a copia — tirar a mascara, tirar o lookbehind — passava verde. Sem binario: nao verificado.
+  local _bin _needle _miss=""; _bin="$(readlink -f "$(command -v claude 2>/dev/null)" 2>/dev/null || true)"
+  local -a _needles=('function pTe(e){return e.replace(/`[^`\n]+`/g,(n,r)=>{let s=e[r-1];return s==="!"||s==="`"?n:"`"+'
+    'cDn=/```!\s*\n?([\s\S]*?)\n?```/g,uDn=/(?<=^|\s)!`([^`]+)`/gm'
+    'let n=e.matchAll(cDn),r=e.includes("!`")?pTe(e).matchAll(uDn):[],s=[];for(let g of[...n,...r]){let h=g[1]?.trim();if(h)s.push({raw:g[0],command:h,at:g.index})}return s')
+  for _needle in "${_needles[@]}"; do
+    LC_ALL=C grep -aqF -- "${_needle}" "${chk}" || _miss="${_miss} guarda:${_needle:0:24}"
+  done
+  # ⚠️ SEM BINARIO NAO E SKIP: o CI nao tem Claude Code instalado e roda em STRICT (skip = FALHA) —
+  #    a 1a redacao pintou o #914 de vermelho por isso. O lado da COPIA e medido sempre; o lado do
+  #    BINARIO so onde ele existe, e o rotulo DIZ que ali nao foi medido (a REGRA 65 cobra a versao).
+  if [ -z "${_bin}" ] || [ ! -f "${_bin}" ]; then
+    if [ -z "${_miss}" ]; then record_pass "cited-directive: (f) a COPIA contem os 3 trechos literais (binario ausente neste host: a deriva do Claude Code NAO foi medida aqui)"
+    else record_fail "cited-directive: (f) copia mutada" "${_miss}"; fi
+  else
+    for _needle in "${_needles[@]}"; do LC_ALL=C grep -aqF -- "${_needle}" "${_bin}" || _miss="${_miss} binario:${_needle:0:24}"; done
+    if [ -z "${_miss}" ]; then record_pass "cited-directive: (f) os 3 trechos literais estao no binario instalado E na guarda (sem deriva)"
+    else record_fail "cited-directive: (f) DERIVA" "ausente em:${_miss} — re-extraia o motor do binario ${_bin##*/} (TETO do cited-directive-check.sh)"; fi
+  fi
+}
+
+run_injected_cut_selftests() {
+  local chk="${REPO_ROOT}/.claude/validation/injected-cut-check.sh"
+  if [ ! -f "${chk}" ]; then record_fail "injected-cut" "guarda ausente: injected-cut-check.sh"; return; fi
+
+  # (a) o --selftest proprio passa inteiro (14 casos). Delegacao, nao copia do predicado.
+  local _o _rc=0
+  _o="$(cd "${REPO_ROOT}" && LC_ALL=C bash "${chk}" --selftest 2>&1)" || _rc=$?
+  if [ "${_rc}" -eq 0 ] && grep -qE '[0-9]+ passaram, 0 falharam' <<< "${_o}"; then
+    record_pass "injected-cut: (a) --selftest proprio verde (as seis formas + a isencao de valor unico)"
+  else record_fail "injected-cut: (a) --selftest" "rc=${_rc}; saida=[${_o}]"; fi
+
+  # (b) O MODO QUE A PRODUCAO CONSOME: `--tsv` no repo real sai 0 e NAO emite linha de violacao.
+  #     Sem este caso, o ramo tsv poderia estar morto e o (a) nao veria.
+  local _t _trc=0
+  # ⚠️ CAMINHO LITERAL, nao a variavel: a REGRA 59 (Modo que a producao consome e exercitado pela
+  #    bancada) extrai o par (script, flags) casando o NOME do arquivo, e `bash "${chk}" … --tsv`
+  #    a deixa CEGA — ela acusou MODO-SEM-TESTE [--tsv] com este caso existindo e passando. O modo
+  #    estava coberto de fato e invisivel ao medidor, que para a regra e o mesmo que descoberto.
+  _t="$(cd "${REPO_ROOT}" && bash "${REPO_ROOT}/.claude/validation/injected-cut-check.sh" "${REPO_ROOT}" --tsv 2>&1)" || _trc=$?
+  if [ "${_trc}" -eq 0 ] && [ -z "${_t}" ]; then
+    record_pass "injected-cut: (b) modo --tsv (o que o lint consome) sai 0 e silencioso no repo real"
+  else record_fail "injected-cut: (b) modo tsv" "rc=${_trc}; saida=[${_t}]"; fi
+
+  # (c) o ramo tsv EMITE no formato que o dispatcher parseia (4 campos, HARD primeiro) quando ha
+  #     achado. O (b) prova o silencio; sem o (c), silencio poderia ser o ramo inteiro morto.
+  local sd; sd="$(mktemp -d)"
+  mkdir -p "${sd}/.claude/commands/meta"
+  printf '# doc\n\n**V:** !`echo ok`\n\n**X:** !`bash algo.sh | head -40`\n' > "${sd}/.claude/commands/meta/zz.md"
+  ( cd "${sd}" && git init -q . && git add -A ) >/dev/null 2>&1
+  local _e _erc=0
+  _e="$(cd "${REPO_ROOT}" && bash "${REPO_ROOT}/.claude/validation/injected-cut-check.sh" "${sd}" --tsv 2>&1)" || _erc=$?
+  if [ "${_erc}" -eq 1 ] && [ "$(awk -F'\t' 'NR==1{print NF}' <<< "${_e}")" = "4" ] \
+     && grep -q '^HARD	REGRA96	' <<< "${_e}"; then
+    record_pass "injected-cut: (c) ramo tsv emite 4 campos HARD/REGRA96 (o formato que o dispatcher le)"
+  else record_fail "injected-cut: (c) formato tsv" "rc=${_erc}; saida=[${_e}]"; fi
+  rm -rf "${sd}"
+
+  # (d) REGISTRO (peca 6): a guarda esta no dispatcher do lint. Guarda exercitada e nao registrada
+  #     nunca dispara — e foi assim que o `consumed-mode-check.sh` ficou DESLIGADO por dois meses.
+  if grep -q 'check_injected_cut_declares$' "${REPO_ROOT}/.claude/validation/lint-artifacts.sh" \
+     && grep -q 'REGRA 96' "${REPO_ROOT}/.claude/validation/lint-artifacts.sh"; then
+    record_pass "injected-cut: (d) registrada no dispatcher do lint-artifacts (peca 6)"
+  else record_fail "injected-cut: (d) registro" "a guarda nao esta no dispatcher — exercitada e muda"
+  fi
+}
+
+run_silent_measurer_selftests() {
+  local cen="${REPO_ROOT}/.claude/validation/forge-census.sh"
+  local cgr="${REPO_ROOT}/.claude/validation/kg-corpus-grep.sh"
+
+  # (a) CORTOU ⇒ DECLARA, com os dois numeros (mostrados e total). Teto 1 forca o corte no repo real.
+  if [ ! -f "${cen}" ]; then record_fail "silent-measurer" "medidor ausente: forge-census.sh"; else
+    local _o _rc=0
+    _o="$(cd "${REPO_ROOT}" && FORGE_CENSUS_TOP=1 bash "${cen}" . --markdown 2>&1)" || _rc=$?
+    # ⚠️ EXTRACAO EM POSICAO PROTEGIDA: o runner roda sob `set -euo pipefail`, e um grep que nao casa
+    #    MATA A SUITE em vez de reprovar o caso. Medido pelo Elenxo do PR #909 com um mutante que
+    #    renomeou o rotulo do cabecalho: a bancada abortou antes da soma. O dano era nulo so porque
+    #    esta familia e a ULTIMA registrada — e deixaria de ser no dia que alguem registrar outra.
+    local _tot=""
+    if ! _tot="$(grep -oE '· [0-9]+ candidato\(s\) rastreado' <<< "${_o}" | grep -oE '[0-9]+' | head -1)"; then _tot=""; fi
+    if [ "${_rc}" -eq 0 ] && grep -q 'PROJECAO CORTADA' <<< "${_o}" \
+       && grep -qE "1 de [0-9]+ candidatos MEDIDOS" <<< "${_o}" \
+       && grep -q 'NAO sao zero' <<< "${_o}"; then
+      record_pass "silent-measurer: (a) projecao cortada DECLARA o corte, os numeros e que ausencia != zero"
+    else
+      record_fail "silent-measurer: (a) corte calado" "rc=${_rc}; total=[${_tot}]; saida=[${_o}]"
+    fi
+
+    # (b) CONTRAPROVA — NAO cortou ⇒ NAO declara. Sem ela a cura passaria sendo aviso incondicional,
+    #     que e ruido e treina o leitor a ignorar o aviso que importa.
+    local _o2 _rc2=0
+    _o2="$(cd "${REPO_ROOT}" && FORGE_CENSUS_TOP=100000 bash "${cen}" . --markdown 2>&1)" || _rc2=$?
+    if [ "${_rc2}" -eq 0 ] && ! grep -q 'PROJECAO CORTADA' <<< "${_o2}"; then
+      record_pass "silent-measurer: (b) projecao COMPLETA nao emite aviso de corte (nao e ruido fixo)"
+    else
+      record_fail "silent-measurer: (b) aviso incondicional" "rc=${_rc2}; aviso presente sem corte"
+    fi
+  fi
+
+  # (c) termo POSICIONAL com espacos faz o que o --query faria, e AVISA que separou.
+  if [ ! -f "${cgr}" ]; then record_fail "silent-measurer" "medidor ausente: kg-corpus-grep.sh"; else
+    local d; d="$(mktemp -d)"
+    printf 'meta:\n  id: fixture-silent-measurer\nnodes:\n  - id: EN_ALVO\n    node_type: entity\n    status: confirmed\n    label: alvo plantado para a bancada\n' > "${d}/f.kg.yaml"
+    local _c _crc=0
+    _c="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/f.kg.yaml" bash "${cgr}" 'alvo plantado inexistentezz' 2>&1)" || _crc=$?
+    # ⚠️ A ASSERCAO `1 nó(s)` E O CORACAO DO CASO, e faltava (R14 do Elenxo do PR #909): cobrar
+    #    so "separou e avisou" deixava passar a classe "separou, avisou, e seguiu devolvendo zero" —
+    #    o caso afirmava menos do que a cura promete. O valor inteiro da cura e o zero VIRAR achado.
+    if [ "${_crc}" -eq 0 ] && grep -q 'separado em 3 termos' <<< "${_c}" \
+       && grep -qE 'termos: alvo, plantado, inexistentezz' <<< "${_c}" \
+       && grep -q 'AMPLIA' <<< "${_c}" \
+       && grep -q '1 nó(s)' <<< "${_c}"; then
+      record_pass "silent-measurer: (c) frase posicional separada, com aviso, e o zero VIROU achado"
+    else
+      record_fail "silent-measurer: (c) frase virou 1 termo" "rc=${_crc}; saida=[${_c}]"
+    fi
+
+    # (d) ZERO sobre corpus POPULADO se explica, em vez de ficar nu.
+    local _z _zrc=0
+    _z="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/f.kg.yaml" bash "${cgr}" zzqxnaoexiste 2>&1)" || _zrc=$?
+    if [ "${_zrc}" -eq 0 ] && grep -q '0 nó(s)' <<< "${_z}" \
+       && grep -q 'ZERO sobre 1 grafos POPULADOS' <<< "${_z}" \
+       && grep -q 'all-status' <<< "${_z}"; then
+      record_pass "silent-measurer: (d) zero sobre corpus populado se EXPLICA (substring/OR/status)"
+    else
+      record_fail "silent-measurer: (d) zero nu" "rc=${_zrc}; saida=[${_z}]"
+    fi
+
+    # (e) MODO FRASE existe e RESTRINGE. A 1a cura separava TODO termo com espacos e matou a
+    #     busca-frase SEM escotilha — trocar consulta precisa por esguicho nao e cura.
+    printf 'meta:\n  id: fixture-frase\nnodes:\n  - id: EN_UM\n    node_type: entity\n    status: confirmed\n    label: o maestro decide\n  - id: EN_DOIS\n    node_type: entity\n    status: confirmed\n    label: decide o rumo sem maestro\n' > "${d}/g.kg.yaml"
+    local _ph _sp
+    _ph="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" --phrase 'o maestro' 2>/dev/null || true)"
+    _sp="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" 'o maestro' 2>/dev/null || true)"
+    if grep -q 'FRASE: o maestro · 1 nó(s)' <<< "${_ph}" && grep -q 'termos: o, maestro · 2 nó(s)' <<< "${_sp}"; then
+      record_pass "silent-measurer: (e) --phrase casa a frase (1) e separado AMPLIA (2) — a escotilha existe"
+    else
+      record_fail "silent-measurer: (e) busca-frase" "frase=[${_ph}] separado=[${_sp}]"
+    fi
+
+    # (f) `--json` sobrevive a `2>&1` nas DUAS ordens de flag. Decidir o aviso no PARSE amarrava o
+    #     comportamento a ordem, e foi assim que a 1a cura deste ponto falhou no proprio dogfood.
+    local _j1 _j2 _jok=1
+    _j1="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" 'o maestro' --json 2>&1 || true)"
+    _j2="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" --json 'o maestro' 2>&1 || true)"
+    printf '%s' "${_j1}" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || _jok=0
+    printf '%s' "${_j2}" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || _jok=0
+    if [ "${_jok}" -eq 1 ]; then
+      record_pass "silent-measurer: (f) --json valido sob 2>&1 nas duas ordens de flag"
+    else
+      record_fail "silent-measurer: (f) json contaminado" "o aviso em stderr quebrou o payload"
+    fi
+
+    # (g) `--top` DECLARA o corte, e nao declara quando nao corta. E a simetria que faltava: o
+    #     censo foi obrigado a declarar e os consumidores deste script cortavam com `head` calado.
+    local _t1 _t2
+    _t1="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" --top 1 maestro 2>/dev/null || true)"
+    _t2="$(cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" --top 99 maestro 2>/dev/null || true)"
+    local _trc=0; (cd "${REPO_ROOT}" && ONION_KG_CORPUS_FILES="${d}/g.kg.yaml" bash "${cgr}" --top 0 maestro >/dev/null 2>&1) || _trc=$?
+    if grep -q 'LISTA CORTADA: 1 de 2' <<< "${_t1}" && ! grep -q 'LISTA CORTADA' <<< "${_t2}" && [ "${_trc}" -eq 2 ]; then
+      record_pass "silent-measurer: (g) --top declara o corte, cala quando nao corta, e RECUSA valor invalido"
+    else
+      record_fail "silent-measurer: (g) --top" "corte=[${_t1}] sem-corte=[${_t2}] rc_invalido=${_trc}"
+    fi
+    rm -rf "${d}"
+  fi
+
+  # (h) RASTREADO-E-AUSENTE-DO-DISCO tem rotulo PROPRIO e nao e confundido com o corte do head.
+  #     Era o 2o corte silencioso do censo, e o aviso da 1a cura MENTIA sobre ele (declarava
+  #     "PROJECAO CORTADA" sem corte algum, e mandava usar `--tsv`, que sofre o mesmo pulo).
+  if [ -f "${cen}" ]; then
+    local sd; sd="$(mktemp -d)"
+    # ⚠️ O SANDBOX TIRA A POPULACAO DO HEAD, MAS O SUT VEM DA ARVORE VIVA. `git archive` traz o
+    #    forge-census COMMITADO — e testar a copia commitada em vez do artefato da arvore e a classe
+    #    mais caruna desta casa (4 ocorrencias num dia, e o proprio lint-selftest avisa na l.514).
+    #    Aqui a distincao e limpa: os candidatos sao DADO (serve o HEAD), o medidor e o SUT (arvore).
+    (cd "${REPO_ROOT}" && git archive HEAD .claude/commands/meta .claude/skills 2>/dev/null | tar -x -C "${sd}") || true
+    mkdir -p "${sd}/.claude/validation"
+    cp "${cen}" "${sd}/.claude/validation/forge-census.sh"
+    for _lib in kg-fixture-paths.sh; do
+      [ -f "${REPO_ROOT}/.claude/validation/${_lib}" ] && cp "${REPO_ROOT}/.claude/validation/${_lib}" "${sd}/.claude/validation/${_lib}"
+    done
+    if [ -d "${sd}/.claude/commands/meta" ]; then
+      (cd "${sd}" && git init -q . >/dev/null 2>&1 && git add -A >/dev/null 2>&1) || true
+      local _vict; _vict="$(cd "${sd}" && git ls-files '.claude/commands/meta/*.md' 2>/dev/null | head -1)"
+      if [ -n "${_vict}" ] && rm -f "${sd}/${_vict}"; then
+        local _do
+        _do="$(cd "${sd}" && FORGE_CENSUS_TOP=100000 bash .claude/validation/forge-census.sh . --markdown 2>&1 || true)"
+        if grep -q 'DESCARTADOS (rastreados pelo git, AUSENTES do disco): 1' <<< "${_do}" \
+           && grep -q "${_vict}" <<< "${_do}" \
+           && ! grep -q 'PROJECAO CORTADA' <<< "${_do}"; then
+          record_pass "silent-measurer: (h) ausente-do-disco tem rotulo proprio e NAO vira 'corte do head'"
+        else
+          record_fail "silent-measurer: (h) 2o corte silencioso" "vitima=[${_vict}]; saida=[${_do}]"
+        fi
+      else record_skip "silent-measurer: (h)" "nao houve candidato para remover no sandbox"; fi
+    else record_skip "silent-measurer: (h)" "git archive nao produziu o sandbox"; fi
+    rm -rf "${sd}"
+  fi
+}
+
+run_role_promotion_selftests() {
+  local ws="${REPO_ROOT}/.claude/utils/adopt/write-stamp.sh"
+  local ad="${REPO_ROOT}/.claude/commands/meta/adopt.md"
+  if [ ! -f "${ws}" ]; then record_fail "role-promotion" "write-stamp.sh ausente"; return; fi
+
+  # (a) O SNIPPET NÃO PASSA IDENTIDADE DERIVADA DO ALVO — nenhuma das três.
+  #     ⚠️ A 1a redacao cobrava uma FORMA (`--commit "$(git -C "$REPO" rev-parse`) e o Elenxo a
+  #     derrubou com DOIS mutantes: `--commit "$(cd "$REPO" && git rev-parse ...)"` — mesmo defeito,
+  #     outra sintaxe — passava VERDE; e a perna `--framework "$(... onion-version.sh ...)"`, que
+  #     estava VIVA e carimbava o NOME DO REPO DO ALVO sobre `onion-evolve`, nunca foi vista. Cobrar forma nao
+  #     cobre comportamento: agora o teste e sobre o CONJUNTO de flags de identidade no bloco.
+  if [ -f "${ad}" ]; then
+    local blk_ph flags_bad=""
+    # o bloco do --promote-hub: da linha do write-stamp.sh ate a linha do `git add -f` seguinte
+    blk_ph="$(awk '/write-stamp\.sh" "\$REPO"/{f=1} f{print} f && /git -C "\$REPO" add -f/{exit}' "${ad}")"
+    if [ -z "${blk_ph}" ]; then
+      record_fail "role-promotion: (a) bloco do --promote-hub nao localizado" "a ancora mudou — o caso ficou cego, conserte o caso antes de confiar nele"
+    else
+      for _f in '--framework' '--commit' '--commit-date'; do
+        LC_ALL=C grep -qF -- "${_f}" <<< "${blk_ph}" && flags_bad="${flags_bad} ${_f}"
+      done
+      if [ -z "${flags_bad}" ]; then
+        record_pass "role-promotion: (a) o snippet nao passa identidade derivada do ALVO (nenhuma das 3 flags)"
+      else
+        record_fail "role-promotion: (a) snippet carimba identidade do ALVO" \
+          "flag(s) de identidade no bloco do --promote-hub:${flags_bad} — promover papel nao muda versao nem framework, e tudo derivado de \$REPO e do ADOTANTE"
+      fi
+    fi
+  else record_skip "role-promotion: (a) adopt.md ausente (adotante) → pulado"; fi
+
+  # (a2) FLAG PRESENTE E VAZIA E ERRO, nao heranca silenciosa (F2 do Elenxo). Em origin/main isso
+  #      era rc=2; a 1a cura do fallback transformou em rc=0 com `updated_at` de HOJE e pin VELHO —
+  #      a propria mentira que a leva diz curar, com ruido trocado por silencio.
+  local dv; dv="$(mktemp -d)"; mkdir -p "${dv}/.claude"
+  printf 'framework: onion-evolve\nsource_commit: 547e2e3edf3b\nsource_commit_date: 2026-10-01\nrole: adopted\nadopted_at: 2026-10-01\n' > "${dv}/.claude/.onion-version"
+  git -C "${dv}" init -q 2>/dev/null
+  local rcv=0 outv
+  outv="$(bash "${ws}" "${dv}" --framework onion-evolve --commit "" --commit-date "" --role adopted 2>&1)" || rcv=$?
+  # ⚠️ O `rc=2` SOZINHO NAO DISTINGUE as duas implementacoes, e medi-lo mostrou isso: sem o laco de
+  #    `*_SET`, a cobranca FINAL tambem devolve 2 (o valor segue vazio e nao ha heranca). O que o
+  #    laco ADICIONA e NOMEAR a flag — e e isso que o operador precisa para achar o `awk` quebrado a
+  #    montante. Logo o caso cobra as DUAS coisas: o rc E a flag nomeada. Mutante que remove o laco
+  #    passaria pelo rc e reprova aqui, que e o comportamento certo de um caso nao-decorativo.
+  if [ "${rcv}" -eq 2 ] && LC_ALL=C grep -q -- '--commit' <<< "${outv}" \
+     && LC_ALL=C grep -qiE 'vazi' <<< "${outv}"; then
+    record_pass "role-promotion: (a2) flag PRESENTE e VAZIA e erro, e a mensagem NOMEIA a flag"
+  else
+    record_fail "role-promotion: (a2) arg vazio mal tratado" \
+      "rc=${rcv} (esperado 2) e a mensagem precisa nomear a flag vazia; veio=[${outv}]"
+  fi
+  rm -rf "${dv}"
+
+  # (a2b) O `--update` LEGITIMO AVANCA O PIN — e este caso nasceu de um mutante que NAO mordeu.
+  #       Medido depois de uma queda de sessao: o mutante que faz o fallback sobrescrever `--commit`
+  #       MESMO com valor passado deixava a bancada VERDE, porque (a2) so exercita o arg VAZIO. O
+  #       fail-open real e outro: um `--update` que passa o pin NOVO teria o pin revertido para o
+  #       VELHO do stamp, em silencio — exatamente o "preserva quando deveria avancar" que o Elenxo
+  #       levantou no F2 e que eu havia coberto so pela metade. "Mutante nao mordeu" tem DUAS causas
+  #       (caso decorativo, ou mutante que nao muda o que o caso afirma) e aqui era a primeira.
+  local du; du="$(mktemp -d)"; mkdir -p "${du}/.claude"
+  printf 'framework: onion-evolve\nsource_commit: 111111111111\nsource_commit_date: 2026-09-01\nrole: adopted\nadopted_at: 2026-09-01\n' > "${du}/.claude/.onion-version"
+  git -C "${du}" init -q 2>/dev/null
+  bash "${ws}" "${du}" --framework onion-evolve --commit 222222222222 --commit-date 2026-10-02 --role adopted >/dev/null 2>&1 || true
+  local pin_u; pin_u="$(LC_ALL=C grep -m1 '^source_commit:' "${du}/.claude/.onion-version" | awk '{print $2}')"
+  if [ "${pin_u}" = "222222222222" ]; then
+    record_pass "role-promotion: (a2b) update com --commit AVANCA o pin (o fallback nao sobrescreve arg valido)"
+  else
+    record_fail "role-promotion: (a2b) fallback reverteu um pin que deveria avancar" \
+      "pin=[${pin_u}] (esperado 222222222222) — um --update legitimo teria a versao revertida em silencio"
+  fi
+  rm -rf "${du}"
+
+  # (a3) COMENTARIO INLINE no stamp nao contamina o pin herdado (F9). Carimbo do mundo real tem
+  #      `source_commit: abc # pin da adocao`, e sem normalizar o comentario voltava ao stamp.
+  local dc; dc="$(mktemp -d)"; mkdir -p "${dc}/.claude"
+  printf 'framework: onion-evolve\nsource_commit: cafed00dcafe  # pin da adocao\nsource_commit_date: 2026-09-01\nrole: adopted\nadopted_at: 2026-09-01\n' > "${dc}/.claude/.onion-version"
+  git -C "${dc}" init -q 2>/dev/null
+  bash "${ws}" "${dc}" --role hub >/dev/null 2>&1 || true
+  local pin_c; pin_c="$(LC_ALL=C grep -m1 '^source_commit:' "${dc}/.claude/.onion-version" | awk '{print $2}')"
+  local extra_c; extra_c="$(LC_ALL=C grep -m1 '^source_commit:' "${dc}/.claude/.onion-version" | LC_ALL=C grep -c '#' || true)"
+  if [ "${pin_c}" = "cafed00dcafe" ] && [ "${extra_c:-0}" -eq 0 ]; then
+    record_pass "role-promotion: (a3) comentario inline no stamp nao contamina o pin herdado"
+  else record_fail "role-promotion: (a3) pin herdado contaminado" "pin=[${pin_c}] comentario-presente=[${extra_c}]"; fi
+  rm -rf "${dc}"
+
+  # (b) COM stamp: promover sem --commit PRESERVA o pin e aplica o papel. Este caso ancora a
+  #     ORDEM (fallback antes da cobranca) por EXECUCAO, nao por numero de linha.
+  local d; d="$(mktemp -d)"
+  mkdir -p "${d}/.claude"
+  printf 'framework: onion-evolve\nsource_commit: abc123def456\nsource_commit_date: 2026-09-01\nrole: adopted\nadopted_at: 2026-09-01\n' > "${d}/.claude/.onion-version"
+  git -C "${d}" init -q 2>/dev/null
+  local rc=0
+  bash "${ws}" "${d}" --role hub >/dev/null 2>&1 || rc=$?
+  local got_pin got_role
+  got_pin="$(LC_ALL=C grep -m1 '^source_commit:' "${d}/.claude/.onion-version" 2>/dev/null | awk '{print $2}')"
+  got_role="$(LC_ALL=C grep -m1 '^role:' "${d}/.claude/.onion-version" 2>/dev/null | awk '{print $2}')"
+  if [ "${rc}" -eq 0 ] && [ "${got_pin}" = "abc123def456" ] && [ "${got_role}" = "hub" ]; then
+    record_pass "role-promotion: (b) promover sem --commit preserva o pin e aplica o papel"
+  else
+    record_fail "role-promotion: (b) promocao perde ou troca o pin" \
+      "rc=${rc} pin=[${got_pin}] (esperado abc123def456) role=[${got_role}] (esperado hub)"
+  fi
+  rm -rf "${d}"
+
+  # (c) SEM stamp: a cobranca CONTINUA valendo. O fallback nao pode virar fail-open — herdar
+  #     de um stamp que nao existe seria inventar versao de framework.
+  local e; e="$(mktemp -d)"; mkdir -p "${e}/.claude"; git -C "${e}" init -q 2>/dev/null
+  rc=0; bash "${ws}" "${e}" --role hub >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" -eq 2 ] && [ ! -f "${e}/.claude/.onion-version" ]; then
+    record_pass "role-promotion: (c) sem stamp a cobranca de --commit segue valendo (nao e fail-open)"
+  else
+    record_fail "role-promotion: (c) fallback virou fail-open" \
+      "rc=${rc} (esperado 2) e stamp $([ -f "${e}/.claude/.onion-version" ] && echo CRIADO || echo ausente)"
+  fi
+  rm -rf "${e}"
+
+  # (d) O PAPEL EXPLICITO VENCE, mas um update SEM --role nao REBAIXA um hub. Sao duas regras
+  #     opostas no mesmo campo, e so a execucao distingue.
+  local f; f="$(mktemp -d)"; mkdir -p "${f}/.claude"
+  printf 'framework: onion-evolve\nsource_commit: abc123def456\nsource_commit_date: 2026-09-01\nrole: hub\nadopted_at: 2026-09-01\n' > "${f}/.claude/.onion-version"
+  git -C "${f}" init -q 2>/dev/null
+  bash "${ws}" "${f}" --framework onion-evolve --commit deadbeef1234 --commit-date 2026-10-02 >/dev/null 2>&1 || true
+  got_role="$(LC_ALL=C grep -m1 '^role:' "${f}/.claude/.onion-version" 2>/dev/null | awk '{print $2}')"
+  if [ "${got_role}" = "hub" ]; then
+    record_pass "role-promotion: (d) update sem --role NAO rebaixa um hub para adopted"
+  else record_fail "role-promotion: (d) hub rebaixado por update" "role ficou [${got_role}], esperado hub"; fi
+  rm -rf "${f}"
+}
+
+# ---------------------------------------------------------------------------
+# REGRA 84 × COMMIT COM PATHSPEC — sinal de campo de um adotante hub (2026-10-02),
+# com causa VERIFICADA por ele: `git commit -- <pathspec>` monta indice TEMPORARIO so
+# com os caminhos do pathspec; o `kg-trace-resolve.sh --emit-index` enumera o corpus
+# por `git ls-files`, entao `.kg.yaml` novo FORA do pathspec desaparece e o indice
+# parece DEFASADO sem estar. Ele mediu 4 de 4 tentativas reprovando com pathspec e
+# passando num commit unico — e o lint a mao dava 0 HARD, isto e, a guarda contradizia
+# o lint sobre o MESMO repo, e mandava "regenere", que ENCURTARIA o indice bom.
+# A cura e a clausula 4 da guard-doctrine: quando nao pode julgar, DECLARA.
+# ---------------------------------------------------------------------------
+run_r84_pathspec_selftests() {
+  local lint="${REPO_ROOT}/.claude/validation/lint-artifacts.sh"
+  if [ ! -f "${lint}" ]; then record_fail "r84-pathspec" "lint ausente"; return; fi
+
+  # (a) O PREDICADO DE INDICE existe no caminho da REGRA 84 (nao so no auto-fix de plugins).
+  #     Cobrado por ancora no BLOCO da regra, nao no arquivo inteiro: o idioma ja existia em
+  #     outro lugar, e foi precisamente o nao-uso dele AQUI que causou o falso positivo.
+  local blk
+  blk="$(awk '/^check_kg_read_index_sync\(\)/,/^}/' "${lint}")"
+  # ⚠️ ANCORADO NO PREDICADO (`case "${GIT_INDEX_FILE...`), nao na MENCAO da variavel — e isto e
+  #    reincidencia registrada: a 1a redacao grepava so `GIT_INDEX_FILE`, e o mutante que cegou o
+  #    `case` (trocando-o por `case "nunca"`) passou VERDE, porque a variavel SOBREVIVE na mensagem
+  #    da violacao. Caso que cobra mencao em vez de comportamento e enfeite, e da licenca.
+  if printf '%s' "${blk}" | LC_ALL=C grep -qF 'case "${GIT_INDEX_FILE'; then
+    record_pass "r84-pathspec: (a) a REGRA 84 TESTA GIT_INDEX_FILE (predicado, nao mencao) antes de acusar"
+  else
+    record_fail "r84-pathspec: (a) guarda cega ao indice temporario" \
+      "check_kg_read_index_sync nao TESTA GIT_INDEX_FILE num case — commit com pathspec volta a reprovar em falso"
+  fi
+
+  # (b) A SEVERIDADE do caminho nao-julgavel e SOFT e a mensagem DECLARA, nao acusa.
+  if printf '%s' "${blk}" | LC_ALL=C grep -q 'PATHSPEC-NAO-JULGAVEL' \
+     && printf '%s' "${blk}" | LC_ALL=C grep -q 'violation "SOFT".*PATHSPEC-NAO-JULGAVEL'; then
+    record_pass "r84-pathspec: (b) indice temporario → SOFT que DECLARA (nao HARD que acusa)"
+  else
+    record_fail "r84-pathspec: (b) severidade errada no caminho nao-julgavel" \
+      "o ramo de indice temporario tem de ser SOFT com o marcador PATHSPEC-NAO-JULGAVEL"
+  fi
+
+  # (c) A MENSAGEM NAO PODE MANDAR REGENERAR nesse ramo — regenerar sob indice parcial ENCURTA
+  #     o indice bom, e foi a acao que a mensagem antiga sugeria. Este caso cobra o CONTRARIO.
+  local msg
+  msg="$(printf '%s' "${blk}" | LC_ALL=C grep 'PATHSPEC-NAO-JULGAVEL')"
+  if printf '%s' "${msg}" | LC_ALL=C grep -qi 'NAO regenere\|NÃO regenere'; then
+    record_pass "r84-pathspec: (c) a mensagem PROIBE regenerar sob indice parcial"
+  else
+    record_fail "r84-pathspec: (c) mensagem sugere a acao destrutiva" \
+      "o ramo nao-julgavel precisa dizer para NAO regenerar: sob indice parcial isso encurta o indice bom"
+  fi
+
+  # (d) AS 4 FORMAS DE INDICE, RODANDO O LINT DE VERDADE.
+  #     ⚠️ A 1a redacao deste caso era DECORATIVA e o Elenxo provou: ela COPIAVA o `case` para dentro
+  #     do proprio caso e testava a COPIA. Mutante que tirava `*/index.lock` da isencao do LINT —
+  #     isto e, fazer `git commit -a` cair na isencao, um fail-open REAL — deixava os 8 casos VERDES.
+  #     O rotulo dizia "por EXECUCAO" e a execucao era da copia. Quarta ocorrencia desta classe na
+  #     mesma sessao: caso que cobra uma copia do SUT nao cobra o SUT.
+  #     Agora: sandbox com `kg-read-index.tsv` genuinamente defasado, e o LINT rodado com cada forma
+  #     de GIT_INDEX_FILE. Formas de indice REAL tem de dar HARD; so a temporaria isenta.
+  local sb; sb="$(mktemp -d)"
+  if ! git -C "${REPO_ROOT}" archive HEAD 2>/dev/null | tar -x -C "${sb}" 2>/dev/null; then
+    record_skip "r84-pathspec: (d) git archive falhou — SUT nao exercido"; rm -rf "${sb}"; return
+  fi
+  # ⚠️ O SANDBOX NASCE DE `git archive HEAD`, LOGO TRAZ O LINT **COMMITADO** — e isso tornava este
+  #    caso incapaz de ver a mudanca que esta sendo feita. Medido: o mutante que tira `*/index.lock`
+  #    da isencao (fail-open real) foi aplicado na ARVORE e o caso passou VERDE, porque o sandbox
+  #    rodava a versao de HEAD. O proprio lint-selftest.sh ja avisa disto na l.514. Entao o SUT
+  #    (e as libs que ele sourceia) vem da ARVORE DE TRABALHO, por cima do archive.
+  #    Esta e a MESMA classe que o Elenxo acabou de me cobrar — testar uma copia em vez do SUT —
+  #    agora na outra ponta: copia do artefato CERTO, mas da REVISAO errada.
+  cp "${REPO_ROOT}/.claude/validation/lint-artifacts.sh" "${sb}/.claude/validation/" 2>/dev/null || true
+  for _dep in "${REPO_ROOT}"/.claude/validation/*.sh; do
+    [ -f "${_dep}" ] && cp "${_dep}" "${sb}/.claude/validation/" 2>/dev/null || true
+  done
+  ( cd "${sb}" && git init -q && git add -A >/dev/null 2>&1 \
+    && git -c user.email=t@t -c user.name=t commit -qm seed >/dev/null 2>&1 ) || true
+  # defasa o indice DE VERDADE: tira linhas do tsv commitado
+  if [ -s "${sb}/docs/onion/kg-read-index.tsv" ]; then
+    LC_ALL=C sed -i '2,4d' "${sb}/docs/onion/kg-read-index.tsv"
+  else
+    record_skip "r84-pathspec: (d) kg-read-index.tsv ausente no sandbox — SUT nao exercido"; rm -rf "${sb}"; return
+  fi
+  _r84_verdict() {   # $1 = valor de GIT_INDEX_FILE ("" = desarmado) → imprime HARD|SOFT|NADA
+    local out
+    if [ -z "$1" ]; then
+      out="$(cd "${sb}" && bash .claude/validation/lint-artifacts.sh --only="${sb}/docs/onion/kg-read-index.tsv" 2>&1 || true)"
+    else
+      out="$(cd "${sb}" && GIT_INDEX_FILE="$1" bash .claude/validation/lint-artifacts.sh --only="${sb}/docs/onion/kg-read-index.tsv" 2>&1 || true)"
+    fi
+    if LC_ALL=C grep -q 'PATHSPEC-NAO-JULGAVEL' <<< "${out}"; then printf 'SOFT'
+    elif LC_ALL=C grep -q 'DEFASADO' <<< "${out}"; then printf 'HARD'
+    else printf 'NADA'; fi
+  }
+  local bad="" v
+  v="$(_r84_verdict "")";                                  [ "${v}" = "HARD" ] || bad="${bad} desarmado=${v}"
+  v="$(_r84_verdict "${sb}/.git/index")";                  [ "${v}" = "HARD" ] || bad="${bad} .git/index=${v}"
+  v="$(_r84_verdict "${sb}/.git/index.lock")";             [ "${v}" = "HARD" ] || bad="${bad} .git/index.lock=${v}"
+  v="$(_r84_verdict "${sb}/.git/next-index-999.lock")";    [ "${v}" = "SOFT" ] || bad="${bad} next-index=${v}"
+  if [ -z "${bad}" ]; then
+    record_pass "r84-pathspec: (d) o LINT REAL julga as 3 formas de indice real e isenta so a temporaria"
+  else record_fail "r84-pathspec: (d) veredito errado do LINT por forma de indice" "divergencia(s):${bad}"; fi
+  unset -f _r84_verdict
+  rm -rf "${sb}"
+}
+
+run_guard_forge_selftests() {
+  local cen="${REPO_ROOT}/.claude/validation/guard-census.sh"
+  local doc="${REPO_ROOT}/.claude/commands/common/prompts/guard-doctrine.md"
+  local srf="${REPO_ROOT}/.claude/commands/meta/forge-guard.md"
+  local hok="${REPO_ROOT}/.claude/hooks/background-state-needs-evidence.sh"
+
+  # (a) o MEDIDOR roda e emite a secao de moldes. Censo que nao mede e contexto que caduca.
+  if [ ! -f "${cen}" ]; then record_fail "guard-forge" "medidor ausente: guard-census.sh"; else
+    local _co _crc=0
+    _co="$(cd "${REPO_ROOT}" && bash "${cen}" . --markdown 2>&1)" || _crc=$?
+    if [ "${_crc}" -eq 0 ] && grep -q 'moldes por SUBSTRATO' <<< "${_co}"; then
+      record_pass "guard-forge: (a) o censo roda e emite os moldes por substrato"
+    else record_fail "guard-forge: (a) censo" "rc=${_crc}; saida=[${_co}]"; fi
+
+    # (b) O CENSO DECLARA O QUE NAO SABE. Medidor que nao declara teto vira oraculo.
+    if grep -q 'TETO' <<< "${_co}" && grep -q -i 'mutante' <<< "${_co}"; then
+      record_pass "guard-forge: (b) o censo declara o TETO e que NAO ve mutante"
+    else record_fail "guard-forge: (b) teto" "o censo nao declara o que esta fora do seu alcance"; fi
+
+    # (c) ELE ACHA AS DUAS MORTES DE GUARDA — por EXECUCAO, num sandbox plantado.
+    #     Esta e a peca 6 (registro) virando verificavel: a 1a rodada do censo real
+    #     acusou a propria guarda que estava sendo forjada naquele instante.
+    local d; d="$(mktemp -d)"
+    mkdir -p "${d}/.claude/hooks" "${d}/.claude/validation"
+    printf '#!/usr/bin/env bash
+# sem selftest
+exit 0
+' > "${d}/.claude/hooks/zz-morta-registrada.sh"
+    printf '#!/usr/bin/env bash
+if [ "${1:-}" = "--selftest" ]; then echo "  ✅ (a) ok"; exit 0; fi
+exit 0
+' > "${d}/.claude/hooks/zz-viva-sem-registro.sh"
+    printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"bash zz-morta-registrada.sh"}]}]}}
+' > "${d}/.claude/settings.json"
+    cp "${cen}" "${d}/.claude/validation/guard-census.sh"
+    local _so; _so="$(cd "${d}" && bash .claude/validation/guard-census.sh . --markdown 2>&1 || true)"
+    # o rotulo mudou quando o censo foi recalibrado (ver o comentario la): a morte real e NAO TER
+    # NENHUM dos dois (flag propria OU familia), nao apenas faltar a flag. A bancada cobrou a
+    # mudanca de contrato, que e exatamente o que ela existe para fazer.
+    if grep -q 'DISPARA e NAO E EXERCITADO' <<< "${_so}" && grep -q 'zz-morta-registrada.sh' <<< "${_so}" \
+       && grep -q 'NÃO REGISTRADO.*zz-viva-sem-registro.sh' <<< "${_so}"; then
+      record_pass "guard-forge: (c) o censo acha as DUAS mortes de guarda (sandbox plantado)"
+    else record_fail "guard-forge: (c) mortes" "o censo nao separou registrada-sem-selftest de viva-sem-registro: [${_so}]"; fi
+    rm -rf "${d}"
+  fi
+
+  # (c2) O CENSO NAO PODE MENTIR — dois sandboxes plantados por um Elenxo que provou as duas
+  #      mentiras: (F7) `_where` casava por SUBSTRING, entao `title-in-prose.sh` — NUNCA registrado
+  #      — aparecia como REGISTRADO porque o nome e substring de `rule-title-in-prose.sh`, e o
+  #      passivo que existe para acha-lo ficava SILENCIOSO; (F8) `--selftest` dentro de COMENTARIO
+  #      contava como molde a copiar. As duas sao graves porque a superficie manda "re-rodar o censo
+  #      para confirmar que saiu do passivo" — confirmacao falsificavel e pior que nenhuma.
+  if [ -f "${cen}" ]; then
+    local d2; d2="$(mktemp -d)"
+    mkdir -p "${d2}/.claude/hooks" "${d2}/.claude/validation"
+    printf '#!/usr/bin/env bash\nif [ "${1:-}" = "--selftest" ]; then echo "  ✅ (a) ok"; exit 0; fi\n' > "${d2}/.claude/hooks/rule-title-in-prose.sh"
+    printf '#!/usr/bin/env bash\nif [ "${1:-}" = "--selftest" ]; then echo "  ✅ (a) ok"; exit 0; fi\n' > "${d2}/.claude/hooks/title-in-prose.sh"
+    printf '#!/usr/bin/env bash\n# TODO: ainda nao tem --selftest\nexit 0\n' > "${d2}/.claude/hooks/zz-comment-only.sh"
+    printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"bash rule-title-in-prose.sh"}]}]}}\n' > "${d2}/.claude/settings.json"
+    cp "${cen}" "${d2}/.claude/validation/guard-census.sh"
+    local _s2; _s2="$(cd "${d2}" && bash .claude/validation/guard-census.sh . --markdown 2>&1 || true)"
+    local _bad=""
+    grep -qE '^hook \| title-in-prose\.sh \| [0-9]+ \| NENHUM' <<< "${_s2}" \
+      || _bad="${_bad} F7(substring-declarou-registrado)"
+    grep -q 'NÃO REGISTRADO.*title-in-prose.sh' <<< "${_s2}" \
+      || _bad="${_bad} F7(passivo-silencioso)"
+    grep -q 'zz-comment-only' <<< "${_s2}" \
+      && _bad="${_bad} F8(mencao-em-comentario-contou-como-molde)"
+    if [ -z "${_bad}" ]; then
+      record_pass "guard-forge: (c2) o censo nao mente por substring nem conta mencao como implementacao"
+    else record_fail "guard-forge: (c2) censo mentiroso" "regressao:${_bad} — saida=[${_s2}]"; fi
+    rm -rf "${d2}"
+  fi
+
+  # (d) a DOUTRINA existe e cobra as pecas que nenhum script cobra.
+  if [ ! -f "${doc}" ]; then record_fail "guard-forge" "doutrina ausente: guard-doctrine.md"; else
+    local _miss=""
+    for term in 'DEFEITO MEDIDO' 'MOLDE medido' 'POLARIDADES' 'MUTANTE' 'REGISTRO' 'TETO declarado'; do
+      grep -qF "${term}" "${doc}" || _miss="${_miss} ${term}"
+    done
+    if [ -z "${_miss}" ]; then record_pass "guard-forge: (d) a doutrina declara as 7 pecas da guarda"
+    else record_fail "guard-forge: (d) doutrina" "peca(s) sem mencao:${_miss}"; fi
+  fi
+
+  # (e) a SUPERFICIE referencia a doutrina em vez de copia-la (a peca 2 do conjunto-irmao).
+  if [ ! -f "${srf}" ]; then record_fail "guard-forge" "superficie ausente: forge-guard.md"; else
+    # ⚠️ SEM CARACTERE ACENTUADO NO PADRAO — defeito medido no 1o dogfood desta familia: a 1a
+    #    redacao usava `n[ãa]o`, e em locale C (o da bancada) o `ã` tem DOIS bytes enquanto `[ãa]`
+    #    casa UM — logo o padrao nunca casava e a guarda acusava uma superficie CORRETA. E a
+    #    clausula 3 da propria guard-doctrine, cometida na familia que a exercita.
+    #    E A LICAO DE METODO, que quase me fez REVERTER a cura certa: eu "refutei" este diagnostico
+    #    rodando `grep` na shell interativa, onde ele e uma FUNCAO que chama o ugrep e casa por
+    #    CARACTERE em qualquer locale. Com o binario que o script usa a conta fecha:
+    #      LC_ALL=C     /usr/bin/grep -qi 'referencie, n[ãa]o copie' <arquivo>  -> rc=1 (NAO casa)
+    #      LC_ALL=C.UTF-8 /usr/bin/grep -qi 'referencie, n[ãa]o copie' <arquivo> -> rc=0 (casa)
+    #    O corpus JA dizia isto no no E_LOCALE_FRAGIL_EM_TRES_SITIOS_PRE_EXISTENTES, e o hook de
+    #    leitura chegou a avisar que o corpus falava do arquivo. Medir comportamento de script exige
+    #    o BINARIO do script (`command grep`/`/usr/bin/grep`), nunca a ferramenta da shell.
+    if grep -q 'guard-doctrine' "${srf}" && grep -qi 'referencie' "${srf}" && grep -qi 'copie' "${srf}"; then
+      record_pass "guard-forge: (e) a superficie referencia a doutrina, nao a duplica"
+    else record_fail "guard-forge: (e) superficie" "a superficie nao aponta para a doutrina"; fi
+  fi
+
+  # (f) DELEGACAO: a guarda que nasceu desta forja tem de passar o proprio selftest.
+  if [ ! -f "${hok}" ]; then record_skip "guard-forge: hook background-state ausente (SUT nao exercido)"; else
+    local _ho _hrc=0
+    _ho="$(LC_ALL=C bash "${hok}" --selftest 2>&1)" || _hrc=$?
+    while IFS= read -r line; do
+      case "${line}" in
+        *"  ✅ "*) record_pass "background-state: ${line#*✅ }" ;;
+        *"  ✗ "*)  record_fail "background-state" "${line#*✗ }" ;;
+      esac
+    done <<< "${_ho}"
+    [ "${_hrc}" -eq 0 ] || record_fail "background-state" "o selftest da guarda saiu ${_hrc}"
+  fi
+}
+
 run_kg_radar_integrity_selftests() {
   local helper="${REPO_ROOT}/.claude/validation/kg-radar-integrity.sh"
   if [ ! -f "${helper}" ]; then record_fail "kg-integridade" "helper ausente"; return; fi
@@ -9694,6 +11106,38 @@ run_githook_selftests() {
   rc=0; bash "${helper}" "/nao/existe/$$" >/dev/null 2>&1 || rc=$?
   if [ "${rc}" -eq 2 ]; then record_pass "githook: dest inválido → exit 2"
   else record_fail "githook: dest inválido" "esperava exit 2, veio ${rc}"; fi
+
+  # (g) MODO-DE-FALHA MEDIDO (adotante, 2026-10-02): repo com "lint-staged" no package.json, SEM
+  #     node_modules e SEM o campo `packageManager` → o hook tem de CHEGAR AO FIM com o skip
+  #     gracioso. A versão anterior morria na ATRIBUIÇÃO do pm (pipeline de `grep` cujo 1º elo não
+  #     casa; `pipefail` propaga, `set -e` mata) — `git commit` saía 1 sem UMA palavra, logo depois
+  #     de o lint Onion imprimir OK. Este caso roda o TEMPLATE, não o instalador: é no corpo do
+  #     hook que o defeito vive, e o instalador saía 0 por cima dele.
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  printf '{\n  "name": "alvo",\n  "lint-staged": { "*.js": "eslint" }\n}\n' > "${d}/package.json"
+  local g_out g_rc=0
+  g_out="$( cd "${d}" && bash "${tpl}" 2>&1 )" || g_rc=$?
+  if [ "${g_rc}" -eq 0 ] && grep -q 'node_modules ausente' <<< "${g_out}"; then
+    record_pass "githook: (g) sem packageManager → skip gracioso (rc=0), não morte silenciosa"
+  else
+    record_fail "githook: (g) morte silenciosa do hook" \
+      "rc=${g_rc} e saída=[${g_out}] — esperava rc=0 com o aviso de skip; fechador precoce voltou"
+  fi
+  rm -rf "${d}"
+
+  # (h) A CURA NÃO PODE SER 'DELETAR A FEATURE'. Com `packageManager` presente, a dica tem de
+  #     NOMEAR o gerenciador do alvo (sinal de campo 2026-07-25: o hook mandava 'pnpm install' num
+  #     repo bun-only). Sem este caso, (g) passaria com a detecção inteira arrancada.
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  printf '{\n  "name": "alvo",\n  "packageManager": "bun@1.1.0",\n  "lint-staged": { "*.js": "eslint" }\n}\n' > "${d}/package.json"
+  g_rc=0; g_out="$( cd "${d}" && bash "${tpl}" 2>&1 )" || g_rc=$?
+  if [ "${g_rc}" -eq 0 ] && grep -q "rode 'bun install'" <<< "${g_out}"; then
+    record_pass "githook: (h) packageManager presente → dica nomeia o gerenciador do alvo"
+  else
+    record_fail "githook: (h) detecção de packageManager perdida" \
+      "rc=${g_rc} e saída=[${g_out}] — esperava a dica com 'bun install'; a cura virou deleção"
+  fi
+  rm -rf "${d}"
 }
 
 # ---------------------------------------------------------------------------
@@ -13781,6 +15225,12 @@ run_role_cut_selftests() {
   #     `forge` entrou em 2026-09-29: é Camada 1 (autoria do framework), declarado core-only no
   #     próprio `forge.md`, e o `forge-census.sh` o cita numa linha de comentário. O caso pegou na
   #     primeira corrida depois de o comando nascer — mecanismo funcionando, não burocracia.
+  #     `dissect` entrou em 2026-10-01 pelo MESMO critério e com a MESMA prova: ele decide o que o
+  #     ONION absorve de ferramenta de terceiro (Camada 1), declara `Core-only` na própria
+  #     `description:`, e o `dissect-census.sh` o cita no docstring. E repetiu o padrão do `forge`:
+  #     pegou na primeira corrida depois de o comando nascer, no mesmo dia. Dois comandos seguidos
+  #     achados por este caso é o sinal de que ele não é burocracia — é o único lugar que liga
+  #     "guarda cita comando" a "o alvo recebe o comando".
   if [ -f "${_resolver}" ]; then
     local _full; _full="$(bash "${_resolver}" standalone --tools 2>/dev/null)"
     local _citados _c _orfaos=""
@@ -13788,7 +15238,17 @@ run_role_cut_selftests() {
     while IFS= read -r _c; do
       [ -n "${_c}" ] || continue
       case "${_c}" in
-        adopt|evolve|forge|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
+        # `forge-guard` entrou em 2026-10-04 pelo MESMO critério e com a MESMA prova de `forge` e
+        #     `dissect`: é a forja de GUARDAS (Camada 1 = autoria do framework), declara `Core-only`
+        #     na própria superfície, e foi pega na PRIMEIRA corrida depois de o comando nascer —
+        #     três comandos seguidos achados por este caso, o que reforça que ele não é burocracia.
+        #     ⚠️ TETO QUE A ENTRADA DELE REVELA, e fica declarado em vez de escondido: a citação que
+        #     disparou o caso estava num COMENTÁRIO DE PROVENIÊNCIA do `injected-cut-check.sh`
+        #     ("forjada pela superfície /meta:forge-guard"), não numa instrução de cura. O caso casa
+        #     MENÇÃO, não "a guarda MANDA rodar" — é a mesma classe que esta casa já mediu duas
+        #     vezes (caso que cobra menção em vez de predicado). Separar os dois exige ler a
+        #     POSIÇÃO da citação (mensagem de violação vs comentário), e isso é leva própria.
+        adopt|evolve|forge|dissect|forge-guard|create-*|federation-*|co-announce|co-deliver) continue ;;  # fábrica/federação
         nao|federation-) continue ;;                                            # falsos positivos do grep
       esac
       [ -f "${REPO_ROOT}/.claude/commands/meta/${_c}.md" ] || continue          # comando que não existe
@@ -14874,9 +16334,14 @@ run_instructions_loaded_selftests() {
   # (c) censo: r1 carregou por glob (candidata -), CLAUDE.md por session_start em 2 sessões, skill x com paths: nunca → NUNCA
   printf '%s\n' '{"ts":"t","session":"s1","file":"CLAUDE.md","memory_type":"Project","load_reason":"session_start","trigger":""}' '{"ts":"t","session":"s2","file":"CLAUDE.md","memory_type":"Project","load_reason":"session_start","trigger":""}' >> "${d}/log.jsonl"
   out="$(bash "${census}" --log "${d}/log.jsonl" --root "${d}" 2>&1 || true)"
-  if grep -qE $'^CLAUDE.md\t2\t2\t0' <<< "${out}"&& grep -qE $'^.claude/rules/r1.md\t1\t0\t1' <<< "${out}"&& grep -qE $'^.claude/skills/x/SKILL.md\t0\t.*\tNUNCA$' <<< "${out}"; then
-    record_pass "instructions-loaded: (c) censo por arquivo × motivo, sessões distintas contadas, paths: que nunca casou ⇒ NUNCA"
+  if grep -qE $'^CLAUDE.md\t2\t2\t0' <<< "${out}"&& grep -qE $'^.claude/rules/r1.md\t1\t0\t1' <<< "${out}"&& grep -qE $'^.claude/skills/x/SKILL.md\t0\t.*\tNAO-MEDIVEL$' <<< "${out}"; then
+    record_pass "instructions-loaded: (c) censo por arquivo × motivo, sessões distintas contadas, skill com paths: ⇒ NAO-MEDIVEL (o hook é cego para skills), nunca NUNCA"
   else record_fail "instructions-loaded: (c) censo" "$(_emit "${out}" | head -4 | tr '\n' '|' | cut -c1-300)"; fi
+  # (e) rule com paths: que nunca carregou continua NUNCA — a cura das skills não pode cegar as rules
+  printf -- '---\npaths: ["lib/**"]\n---\n# r2\n' > "${d}/.claude/rules/r2.md"
+  out="$(bash "${census}" --log "${d}/log.jsonl" --root "${d}" 2>&1 || true)"
+  if grep -qE $'^.claude/rules/r2.md\t0\t.*\tNUNCA$' <<< "${out}"; then record_pass "instructions-loaded: (e) rule com paths: que nunca casou segue NUNCA (só skill é NAO-MEDIVEL)"
+  else record_fail "instructions-loaded: (e) rule NUNCA" "$(grep r2 <<< "${out}" | head -1)"; fi
   # (d) censo sem log ⇒ exit 3 nomeando a causa (não é zero silencioso)
   rc=0; out="$(bash "${census}" --log "${d}/nao-existe.jsonl" --root "${d}" 2>&1)" || rc=$?
   if [ "${rc}" -eq 3 ] && grep -q "sem censo" <<< "${out}"; then record_pass "instructions-loaded: (d) sem log ⇒ exit 3 declarando (nunca 0 calado)"
@@ -16742,6 +18207,10 @@ run_drive_selftests() {
     "deadlock|DEADLOCK: pronto=0 bloqueado=2|1"
     "predecessor-closed|READY: pronto=1 bloqueado=0|0"
     "all-done|DONE: pronto=0 bloqueado=0 (aberto=0)|0"
+    # P0.5 no GRAFO (2026-10-04): o checkpoint pendente vence o READY e sai ≠0; o selado não
+    # muda nada; e a linha COMENTADA no meta da fixture pendente não pode ser a que dispara.
+    "checkpoint-pending|CHECKPOINT-PENDENTE: pronto=2 bloqueado=1|1"
+    "checkpoint-sealed|READY: pronto=2 bloqueado=1|0"
   )
   local c name want wantrc rc out f
   for c in "${cases[@]}"; do
@@ -16758,6 +18227,44 @@ run_drive_selftests() {
       record_fail "drive: ${name} (censo)" "esperava '${want}' em: ${out}"
     fi
   done
+  # valor desconhecido em meta.drive_checkpoint RECUSA (rc=2) — campo de controle que ninguém
+  # reconhece é o selo que ninguém vê; e a nota do lote chega à saída do --check.
+  local bad; bad="$(mktemp --suffix=.kg.yaml)"
+  sed 's/drive_checkpoint: pending/drive_checkpoint: talvez/' "${fx}/checkpoint-pending.kg.yaml" > "${bad}"
+  rc=0; out="$(bash "${ds}" "${bad}" --check 2>&1)" || rc=$?
+  if [ "${rc}" -eq 2 ] && grep -q "valor desconhecido: 'talvez'" <<< "${out}"; then
+    record_pass "drive: meta.drive_checkpoint com valor desconhecido RECUSA (rc=2)"
+  else record_fail "drive: checkpoint desconhecido" "rc=${rc}: ${out}"; fi
+  rm -f "${bad}"
+  out="$(bash "${ds}" "${fx}/checkpoint-pending.kg.yaml" --check 2>&1 || true)"
+  if grep -q 'NÃO selado: lote 3' <<< "${out}"; then record_pass "drive: o --check nomeia o lote pendente (drive_checkpoint_note)"
+  else record_fail "drive: nota do checkpoint" "${out}"; fi
+  # LEITURA POR YAML (Elenxo da leva 2: o awk errava em 7 formas válidas). Dois casos de polaridade
+  # oposta: a chave CITADA num texto do meta e num label de nó NÃO conta; aspas simples CONTA.
+  local d2; d2="$(mktemp -d)"; local body; body="$(sed -n '/^nodes:/,$p' "${fx}/ready-and-blocked.kg.yaml")"
+  printf 'meta:\n  schema_version: 1\n  description: "drive_checkpoint: pending"\n  drive_checkpoint: sealed\n%s\n' "${body/pergunta-raiz/drive_checkpoint: pending}" > "${d2}/citada.kg.yaml"
+  rc=0; out="$(bash "${ds}" "${d2}/citada.kg.yaml" --check 2>&1)" || rc=$?
+  if [ "${rc}" -eq 0 ] && grep -q 'READY' <<< "${out}"; then record_pass "drive: a chave CITADA num texto do meta ou num label nao e o campo (le YAML, nao texto)"
+  else record_fail "drive: chave citada" "rc=${rc}: ${out}"; fi
+  printf "meta:\n  schema_version: 1\n  drive_checkpoint: 'pending'\n%s\n" "${body}" > "${d2}/simples.kg.yaml"
+  rc=0; out="$(bash "${ds}" "${d2}/simples.kg.yaml" --check 2>&1)" || rc=$?
+  if [ "${rc}" -eq 1 ] && grep -q 'CHECKPOINT-PENDENTE' <<< "${out}"; then record_pass "drive: aspas simples tambem sao pending (o awk antigo dava READY)"
+  else record_fail "drive: aspas simples" "rc=${rc}: ${out}"; fi
+  # ESCRITA MECANICA: --close-lot escreve pending+nota e o censo PARA; --seal libera. E meta em
+  # flow-style RECUSA a escrita (rc=2) sem tocar o arquivo.
+  printf 'meta:\n  schema_version: 1\n%s\n' "${body}" > "${d2}/lote.kg.yaml"
+  local _w=0
+  bash "${ds}" "${d2}/lote.kg.yaml" --close-lot 'lote 9: PR #1' >/dev/null 2>&1 || _w=1
+  rc=0; bash "${ds}" "${d2}/lote.kg.yaml" --check >/dev/null 2>&1 || rc=$?; [ "${rc}" -eq 1 ] || _w=2
+  bash "${ds}" "${d2}/lote.kg.yaml" --seal >/dev/null 2>&1 || _w=3
+  rc=0; bash "${ds}" "${d2}/lote.kg.yaml" --check >/dev/null 2>&1 || rc=$?; [ "${rc}" -eq 0 ] || _w=4
+  if [ "${_w}" -eq 0 ]; then record_pass "drive: --close-lot faz o censo PARAR e --seal o libera (a escrita do P5 e mecanica)"
+  else record_fail "drive: escrita do checkpoint" "falhou no passo ${_w}"; fi
+  cp "${fx}/ready-and-blocked.kg.yaml" "${d2}/flow.kg.yaml"
+  rc=0; bash "${ds}" "${d2}/flow.kg.yaml" --close-lot x >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" -eq 2 ] && cmp -s "${fx}/ready-and-blocked.kg.yaml" "${d2}/flow.kg.yaml"; then record_pass "drive: meta flow-style RECUSA a escrita e nao toca o arquivo"
+  else record_fail "drive: flow-style" "rc=${rc}"; fi
+  rm -rf "${d2}"
 }
 
 # REGRA 34 pós-cutover (derivação commitada) — a regra HARD nova entrou sem rede
@@ -16806,7 +18313,7 @@ EOF_BASE
 
   # ── ÁRVORE: os nós nascidos DEPOIS da base ────────────────────────────────────────────────────
   cat > "${sb}/g/p.kg.yaml" <<'EOF_WORK'
-meta: { schema_version: 1, baseline: "2026-08-01" }
+meta: { schema_version: 1, baseline: "2026-08-01", drive_checkpoint: pending, drive_checkpoint_note: "lote 1 — auto-selado pela §4.1: Q_NOVO_E_CAIDO" }
 nodes:
   - id: Q_JA_SELADO
     node_type: question
@@ -17000,6 +18507,13 @@ EOF_A2
   }
 
   _caso "(a) nó nascido-e-caído no mesmo PR → AUTO"                  0 "AUTO" g/p.kg.yaml Q_NOVO_E_CAIDO --base HEAD
+  # (4) MECANIZADA (2026-10-04): o mesmo flip, com a nota do lote que NÃO o nomeia (id prefixo de
+  #     outro, para provar a fronteira) e sem checkpoint pendente — os dois PARAM.
+  sed 's/auto-selado pela §4.1: Q_NOVO_E_CAIDO/auto-selado: Q_NOVO_E_CAIDO_OUTRO/' "${sb}/g/p.kg.yaml" > "${sb}/g/p4.kg.yaml"
+  _caso "(a4) a nota do lote não NOMEIA o flip (só um id que o contém) → PARA" 1 "(4)" g/p4.kg.yaml Q_NOVO_E_CAIDO --base HEAD
+  sed 's/drive_checkpoint: pending, //' "${sb}/g/p.kg.yaml" > "${sb}/g/p5.kg.yaml"
+  _caso "(a5) sem checkpoint pendente no grafo → PARA"                   1 "(4)" g/p5.kg.yaml Q_NOVO_E_CAIDO --base HEAD
+  rm -f "${sb}/g/p4.kg.yaml" "${sb}/g/p5.kg.yaml"
   _caso "(a2) aresta em ordem alternada É lida (PARA por Aufhebung)" 1 "Aufhebung não foi aplicada" g/aberto.kg.yaml Q_NOVO_AINDA_ABERTO --base HEAD
   _caso "(b) nó já em <base> → PARA por (1)"                         1 "(1)" g/p.kg.yaml Q_JA_SELADO --base HEAD
   _caso "(c) flip sem aresta → PARA por (3)"                         1 "(3)" g/aberto.kg.yaml Q_NOVO_SEM_ARESTA --base HEAD
@@ -19408,6 +20922,203 @@ run_glob_branch_parity_selftests() {
 }
 
 _family run_forge_selftests
+
+# ── CENSO DE DISSECAÇÕES (peça 3 do /meta:dissect) ───────────────────────────────────────────
+# POR QUE EXISTE: o medidor responde "já dissecamos esta ferramenta, até que nível, quando?" — e a
+# resposta de memória erra. Em 2026-10-01 uma rodada re-abriu Zep/Port/Roadie sem ler o corpus e
+# registrou "a Onyx não entrega grafo" quando a doc do fornecedor diz o contrário. Os casos abaixo
+# cobram as três polaridades que importam: nível é o MAIOR (não o último), ausência de carimbo
+# NUNCA vira "fresco", e "medi e deu zero" é resposta ENQUANTO "não pude medir" é recusa rc=3.
+# Âncoras de grep são ASCII de propósito: a bancada roda em LC_ALL=C e acento não casa lá.
+run_dissect_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/dissect-census.sh"
+  if [ ! -f "${sut}" ]; then record_fail "dissect" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  git -C "${d}" init -q -b main 2>/dev/null || { record_fail "dissect" "git init falhou na sandbox"; return; }
+  mkdir -p "${d}/docs/evolution/dissect"
+
+  local _dc_out _dc_rc
+  _dc() { git -C "${d}" add -A >/dev/null 2>&1
+          if _dc_out="$(bash "${sut}" "${d}" "${1:---tsv}" 2>&1)"; then _dc_rc=0; else _dc_rc=$?; fi }
+  _col() { printf '%s\n' "${_dc_out}" | awk -F'\t' -v t="$1" -v c="$2" '$1==t{print $c; exit}'; }
+
+  # (f) CORPUS PRESENTE e ZERO dissecação ⇒ rc=0 com a frase que DISTINGUE de "não pude medir".
+  #     É o par-polaridade do caso (e): confundir os dois é o que faz um censo vazio passar por
+  #     medição. [[exit-code-nao-e-a-verificacao]]
+  printf 'meta:\n  id: outro\nnodes: []\n' > "${d}/docs/evolution/dissect/naoeh.kg.yaml"
+  _dc --markdown
+  if [ "${_dc_rc}" = "0" ] && grep -q 'Nenhum grafo do corpus se declara' <<< "${_dc_out}"; then
+    record_pass "dissect: (f) corpus presente com ZERO dissecacao ⇒ rc=0 DECLARANDO zero (≠ recusa)"
+  else record_fail "dissect: (f)" "esperado rc=0 + frase de zero, veio rc=${_dc_rc}: $(_emit "${_dc_out}" | head -c 200)"; fi
+
+  # (b) CLÁUSULA 1 — grafo SEM `dissect_tool:` nao é dissecacao, mesmo falando da ferramenta.
+  #     Mutante: predicado que contasse qualquer grafo sob docs/evolution/dissect/ daria 1 aqui.
+  _dc --tsv
+  if [ "$(printf '%s\n' "${_dc_out}" | tail -n +2 | grep -c .)" = "0" ]; then
+    record_pass "dissect: (b) grafo sem marcador dissect_tool NAO conta como dissecacao (clausula 1)"
+  else record_fail "dissect: (b)" "grafo sem dissect_tool entrou no censo: $(_emit "${_dc_out}" | head -c 200)"; fi
+
+  # (a) NÍVEL = O MAIOR declarado, nunca o último do arquivo. MUTANTE: `| tail -1` em vez do laço
+  #     de máximo devolveria 1 (a ordem do arquivo não é a ordem da escada) — e ler a ordem do
+  #     arquivo como ordem da escada é ler a projeção como fonte.
+  mkdir -p "${d}/docs/evolution/dissect/alpha-2026-10"
+  cat > "${d}/docs/evolution/dissect/alpha-2026-10/alpha-2026-10.kg.yaml" <<'KG'
+meta:
+  id: alpha-2026-10
+  dissect_tool: alpha
+  baseline: 2026-10-01
+  review_after: 2099-01-01
+nodes:
+  - id: E_N2
+    dissect_level: 2
+  - id: E_N1
+    dissect_level: 1
+KG
+  _dc --tsv
+  if [ "$(_col alpha 2)" = "2" ]; then
+    record_pass "dissect: (a) nivel = o MAIOR declarado (2), nao o ultimo do arquivo (1)"
+  else record_fail "dissect: (a)" "esperado nivel 2 p/ alpha, veio '$(_col alpha 2)'"; fi
+
+  # (c1) review_after no FUTURO ⇒ fresco.
+  if [ "$(_col alpha 6)" = "fresco" ]; then
+    record_pass "dissect: (c1) review_after no futuro ⇒ fresco"
+  else record_fail "dissect: (c1)" "esperado fresco, veio '$(_col alpha 6)'"; fi
+
+  # (c2) review_after no PASSADO ⇒ VENCIDO (dissecacao vencida nao se cita como de hoje).
+  mkdir -p "${d}/docs/evolution/dissect/beta-2026-01"
+  cat > "${d}/docs/evolution/dissect/beta-2026-01/beta-2026-01.kg.yaml" <<'KG'
+meta:
+  id: beta-2026-01
+  dissect_tool: beta
+  baseline: 2026-01-01
+  review_after: 2026-01-31
+nodes:
+  - id: E_N4
+    dissect_level: 4
+  - id: D_BETA
+    dissect_verdict: parquear
+KG
+  _dc --tsv
+  if [ "$(_col beta 6)" = "VENCIDO" ]; then
+    record_pass "dissect: (c2) review_after no passado ⇒ VENCIDO"
+  else record_fail "dissect: (c2)" "esperado VENCIDO, veio '$(_col beta 6)'"; fi
+
+  # (c3) MUTANTE DA POLARIDADE — SEM review_after ⇒ NAO-DECLARADO, JAMAIS "fresco" por omissao.
+  #      Guarda que nao sabe nunca afirma conformidade (P0 da REGRA 30).
+  mkdir -p "${d}/docs/evolution/dissect/gama-2026-10"
+  printf 'meta:\n  id: gama\n  dissect_tool: gama\nnodes:\n  - id: E_N0\n    dissect_level: 0\n' \
+    > "${d}/docs/evolution/dissect/gama-2026-10/gama-2026-10.kg.yaml"
+  _dc --tsv
+  if [ "$(_col gama 6)" = "NAO-DECLARADO" ]; then
+    record_pass "dissect: (c3) sem review_after ⇒ NAO-DECLARADO (nunca 'fresco' por omissao)"
+  else record_fail "dissect: (c3)" "esperado NAO-DECLARADO, veio '$(_col gama 6)'"; fi
+
+  # (h) CAMINHO DE PRODUÇÃO — `--markdown` é o que a superfície manda rodar, e é onde a secao de
+  #     PARQUEADAS existe. Testar so o --tsv deixaria a projecao 100% nao-testada
+  #     [[testar-no-caminho-errado-e-nao-testar]].
+  _dc --markdown
+  if grep -q 'parqueadas' <<< "${_dc_out}" && grep -q 'beta' <<< "${_dc_out}"; then
+    record_pass "dissect: (h) --markdown lista a secao de parqueadas com a ferramenta de veredito parquear"
+  else record_fail "dissect: (h)" "secao de parqueadas ausente no caminho de producao: $(_emit "${_dc_out}" | head -c 300)"; fi
+
+  # (h2) o cabecalho do caminho de producao NAO MENTE: conta de dissecacoes = linhas do --tsv.
+  local md_n tsv_n
+  md_n="$(printf '%s\n' "${_dc_out}" | sed -n 's/^# censo de disseca.* \([0-9]\+\) disseca.*/\1/p')"
+  _dc --tsv
+  tsv_n="$(printf '%s\n' "${_dc_out}" | tail -n +2 | grep -c .)"
+  if [ -n "${md_n}" ] && [ "${md_n}" = "${tsv_n}" ]; then
+    record_pass "dissect: (h2) cabecalho do --markdown concorda com as linhas do --tsv (${tsv_n})"
+  else record_fail "dissect: (h2)" "cabecalho diz '${md_n}' e o tsv tem ${tsv_n} linha(s) — a projecao mente"; fi
+
+  # (d) sem indice git ⇒ rc=3 DECLARANDO. Censo e do conjunto RASTREADO; zero nao e resultado
+  #     quando a causa e nao ter podido olhar.
+  local ng ong orc=0; ng="$(mktemp -d)"
+  mkdir -p "${ng}/docs"; printf 'meta:\n  dissect_tool: x\n' > "${ng}/docs/x.kg.yaml"
+  if ong="$(bash "${sut}" "${ng}" --tsv 2>&1)"; then orc=0; else orc=$?; fi
+  if [ "${orc}" = "3" ] && grep -q 'o censo seria de outro conjunto' <<< "${ong}"; then
+    record_pass "dissect: (d) sem indice git ⇒ rc=3 DECLARANDO (nunca censo vazio)"
+  else record_fail "dissect: (d)" "sem git nao recusou (rc=${orc}): $(_emit "${ong}" | head -c 200)"; fi
+  rm -rf "${ng}"
+
+  # (e) git presente e ZERO .kg.yaml rastreado ⇒ rc=3. Par-polaridade do (f): aqui nao HA corpus.
+  local er oev vrc=0; er="$(mktemp -d)"; git -C "${er}" init -q -b main 2>/dev/null
+  if oev="$(bash "${sut}" "${er}" --tsv 2>&1)"; then vrc=0; else vrc=$?; fi
+  if [ "${vrc}" = "3" ] && grep -q 'sem corpus' <<< "${oev}"; then
+    record_pass "dissect: (e) zero .kg.yaml rastreado ⇒ rc=3 DECLARANDO (≠ o zero medido do caso f)"
+  else record_fail "dissect: (e)" "repo sem corpus nao recusou (rc=${vrc}): $(_emit "${oev}" | head -c 200)"; fi
+  rm -rf "${er}"
+}
+
+_family run_dissect_selftests
+
+# ── CLASSIFICAÇÃO I/O DO GATE (passo 1 da Capacidade 1) ──────────────────────────────────────
+# POR QUE EXISTE: o SUT nasceu SEM bancada, e o custo apareceu no mesmo dia — o seletor
+# `--affected-staged` não achou família que o citasse e RECUSOU estreitar ("tudo, no incerto"),
+# levando o pre-commit a rodar as 203 famílias. SUT sem família é um furo que se paga em minutos de
+# gate. Os três casos de mutante abaixo são os defeitos que o PRÓPRIO script registra ter cometido:
+# comentário contado como escrita, `echo` citando o verbo, e a correção-da-correção (filtrar por
+# "contém echo" derrubou 4 escritores reais — o teste é a POSIÇÃO, não a presença).
+run_guard_io_classify_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/guard-io-classify.sh"
+  if [ ! -f "${sut}" ]; then record_fail "guard-io" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  mkdir -p "${d}/.claude/validation" "${d}/.githooks"
+  printf 'echo "regenere com byte-a-byte"\n' > "${d}/.claude/validation/lint-artifacts.sh"
+
+  local _g_out _g_rc
+  _g() { if _g_out="$(bash "${sut}" "${d}" --tsv 2>&1)"; then _g_rc=0; else _g_rc=$?; fi }
+  # classe da linha N do pre-commit, lida do TSV (campo 1 = classe, 3 = linha)
+  _cls() { printf '%s\n' "${_g_out}" | awk -F'\t' -v l="$1" '$2=="pre-commit" && $3==l {print $1; exit}'; }
+
+  # (a) `git add` no inicio da linha ⇒ ESCRITOR (o caminho feliz).
+  printf 'git add "${f}"\n' > "${d}/.githooks/pre-commit"
+  _g
+  if [ "$(_cls 1)" = "ESCRITOR" ]; then
+    record_pass "guard-io: (a) \`git add\` no inicio da linha ⇒ ESCRITOR"
+  else record_fail "guard-io: (a)" "esperado ESCRITOR na l.1, veio '$(_cls 1)' — saida: $(_emit "${_g_out}" | head -c 200)"; fi
+
+  # (b) MUTANTE DO 1o DEFEITO — comentario CITA `git add` e nao executa: 3 de 8 linhas da heuristica
+  #     crua eram falso positivo. Classificar com confianca onde se devia hesitar e o defeito.
+  printf '# explica o git add que vem abaixo\ngit add "${f}"\n' > "${d}/.githooks/pre-commit"
+  _g
+  if [ "$(_cls 1)" = "NÃO-MEDIDO" ] && [ "$(_cls 2)" = "ESCRITOR" ]; then
+    record_pass "guard-io: (b) comentario que CITA git add ⇒ NÃO-MEDIDO, e o git add real segue ESCRITOR"
+  else record_fail "guard-io: (b)" "l.1 esperada NÃO-MEDIDO e l.2 ESCRITOR; veio '$(_cls 1)' e '$(_cls 2)'"; fi
+
+  # (c) MUTANTE DO 2o DEFEITO — a linha E uma mensagem: `echo` ANTES do verbo e mencao.
+  printf 'echo "rode git add para estagiar"\n' > "${d}/.githooks/pre-commit"
+  _g
+  if [ "$(_cls 1)" = "NÃO-MEDIDO" ]; then
+    record_pass "guard-io: (c) linha que COMECA com echo ⇒ NÃO-MEDIDO (cita, nao executa)"
+  else record_fail "guard-io: (c)" "esperado NÃO-MEDIDO, veio '$(_cls 1)'"; fi
+
+  # (d) A CORRECAO DA CORRECAO, e e o caso que mais importa: `git add X || echo "aviso"` EXECUTA a
+  #     escrita E tem echo. Filtrar por "contem echo" derrubou 4 escritores REAIS — a polaridade
+  #     certa e a POSICAO (echo DEPOIS do verbo e aviso de falha, nao mencao).
+  printf 'git add "${f}" || echo "aviso: falhou"\n' > "${d}/.githooks/pre-commit"
+  _g
+  if [ "$(_cls 1)" = "ESCRITOR" ]; then
+    record_pass "guard-io: (d) \`git add X || echo aviso\` ⇒ ESCRITOR (echo DEPOIS do verbo e aviso)"
+  else record_fail "guard-io: (d)" "esperado ESCRITOR, veio '$(_cls 1)' — a regressao do filtro 'contem echo' voltou"; fi
+
+  # (e) FAIL-CLOSED: hook ilegivel ⇒ rc=3 DECLARANDO, nunca conformidade por ausencia (P0 da REGRA 30).
+  rm -f "${d}/.githooks/pre-commit"
+  _g
+  if [ "${_g_rc}" = "3" ] && grep -q 'NAO PUDE JULGAR' <<< "${_g_out}" 2>/dev/null \
+     || { [ "${_g_rc}" = "3" ] && grep -q 'PUDE JULGAR' <<< "${_g_out}"; }; then
+    record_pass "guard-io: (e) hook ilegivel ⇒ rc=3 DECLARANDO (nao conformidade por ausencia)"
+  else record_fail "guard-io: (e)" "esperado rc=3 declarando, veio rc=${_g_rc}: $(_emit "${_g_out}" | head -c 200)"; fi
+
+  # (f) FAIL-CLOSED do outro lado: lint ilegivel ⇒ rc=3 (o par precisa dos DOIS arquivos).
+  printf 'git add x\n' > "${d}/.githooks/pre-commit"
+  rm -f "${d}/.claude/validation/lint-artifacts.sh"
+  _g
+  if [ "${_g_rc}" = "3" ]; then
+    record_pass "guard-io: (f) lint ilegivel ⇒ rc=3 (classifica o PAR, nao metade dele)"
+  else record_fail "guard-io: (f)" "esperado rc=3, veio rc=${_g_rc}"; fi
+}
+
+_family run_guard_io_classify_selftests
 # ── PARIDADE registro × CARIMBO das portas (REGRA 92) ────────────────────────────────────────
 # POR QUE EXISTE: em 2026-09-30 o `members.yaml` dizia `role: standalone` para a `onion-core`
 # enquanto o carimbo dela dizia `hub` (11 materializações seguidas). Eu li o registro, materializei
@@ -19876,6 +21587,221 @@ _family run_kb_applies_to_selftests
 _family run_zoho_adapter_selftests
 _family run_door_role_change_refusal_selftests
 _family run_review_cause_bands_selftests
+_family run_mutant_leftover_selftests
+
+# ── ANÚNCIO QUE AFIRMA ZERO SEM MEDIÇÃO (REGRA 95) ───────────────────────────────────────────
+# POR QUE EXISTE: o anúncio é o ÚNICO documento que chega ANTES do merge, e em 2026-08-31 um zero
+# em prosa ("As portas estão OK (nenhuma sem prefixo de bind)") congelou 38 exposições como
+# toleradas — o número certo estava doze linhas acima, no MESMO documento, e não ajudou.
+# O caso (a) é o dano REAL reproduzido verbatim, e o (b) é o mutante que a 1ª versão da guarda
+# sofreu: casando LINHA a LINHA, o wrap do markdown parte a afirmação e a guarda passa verde no
+# caso que a motivou. Guarda que não pega o próprio dano é teatro.
+run_announce_zero_claim_selftests() {
+  local sut="${REPO_ROOT}/.claude/validation/announce-zero-claim-check.sh"
+  if [ ! -x "${sut}" ]; then record_fail "anuncio-zero" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  git -C "${d}" init -q -b main 2>/dev/null || { record_fail "anuncio-zero" "git init falhou"; return; }
+  local ob="${d}/docs/evolution/federation/outbox"
+  mkdir -p "${ob}/alvo" "${ob}/alvo/_processed"
+
+  local _az_out _az_rc
+  _az() { git -C "${d}" add -A >/dev/null 2>&1
+          if _az_out="$(bash "${sut}" "${d}" 2>&1)"; then _az_rc=0; else _az_rc=$?; fi }
+
+  # (a) O DANO REAL, verbatim e com o WRAP preservado — ZERO numa linha, CLASSE na anterior.
+  printf 'em qualquer ambiente, incluindo a produção na AWS (security group não cobre isso). As portas\nestão OK (nenhuma sem prefixo de bind).\n' > "${ob}/alvo/2026-08-31-caso.md"
+  _az
+  if [ "${_az_rc}" = "1" ] && grep -q 'SEM-MEDICAO' <<< "${_az_out}"; then
+    record_pass "anuncio-zero: (a) o dano REAL de 2026-08-31 é acusado, com a afirmação PARTIDA por wrap de markdown"
+  else record_fail "anuncio-zero: (a)" "o dano real NAO foi acusado (rc=${_az_rc}) — a guarda nao pega o caso que a motivou: $(_emit "${_az_out}" | head -c 200)"; fi
+
+  # (b) a mensagem aponta o SÍTIO (arquivo:linha do parágrafo) e CITA a frase — diagnóstico é parte
+  #     do contrato: quem lê tem de saber onde consertar.
+  if grep -q '2026-08-31-caso.md:1' <<< "${_az_out}" && grep -q 'nenhuma sem prefixo' <<< "${_az_out}"; then
+    record_pass "anuncio-zero: (b) a acusacao aponta arquivo:linha do paragrafo e CITA a frase"
+  else record_fail "anuncio-zero: (b)" "acusacao sem sitio ou sem a frase: $(_emit "${_az_out}" | head -c 200)"; fi
+
+  # (c) PROVENIÊNCIA no MESMO parágrafo CALA — é a cura que a doutrina manda ("cole o número").
+  printf 'As portas estão OK (nenhuma sem prefixo de bind), medido por `bash ops/x.sh`.\n' > "${ob}/alvo/2026-08-31-caso.md"
+  _az
+  if [ "${_az_rc}" = "0" ]; then
+    record_pass "anuncio-zero: (c) medicao colada no MESMO paragrafo cala a guarda"
+  else record_fail "anuncio-zero: (c)" "proveniencia colada nao calou (rc=${_az_rc}): $(_emit "${_az_out}" | head -c 200)"; fi
+
+  # (d) 'não medido' declarado CALA — ausência legítima é desfecho de 1ª classe nesta casa.
+  printf 'Portas: nenhuma exposição conhecida — porém **não medido** nesta leva.\n' > "${ob}/alvo/2026-08-31-caso.md"
+  _az
+  if [ "${_az_rc}" = "0" ]; then
+    record_pass "anuncio-zero: (d) 'nao medido' declarado cala (ausencia legitima e desfecho, nao falha)"
+  else record_fail "anuncio-zero: (d)" "'nao medido' nao calou (rc=${_az_rc})"; fi
+
+  # (e) O INCIDENTE EXATO: o número CERTO em OUTRO parágrafo NÃO cala. É o que de fato aconteceu —
+  #     o "38" estava doze linhas acima e o leitor ainda concluiu que não havia o que fazer.
+  printf 'Os 38 casos legados entraram na baseline tolerada, medido por `bash ops/x.sh`.\n\nAs portas estão OK (nenhuma sem prefixo de bind).\n' > "${ob}/alvo/2026-08-31-caso.md"
+  _az
+  if [ "${_az_rc}" = "1" ]; then
+    record_pass "anuncio-zero: (e) numero certo em OUTRO paragrafo NAO cala — a proveniencia tem de estar ONDE a afirmacao esta"
+  else record_fail "anuncio-zero: (e)" "o incidente real passou (rc=${_az_rc}) — a guarda aceitou proveniencia distante"; fi
+
+  # (f) ZERO sem CLASSE VERIFICÁVEL não acusa — prosa comum não é afirmação de estado medível.
+  printf 'Nenhuma novidade de agenda nesta leva.\n' > "${ob}/alvo/2026-08-31-caso.md"
+  _az
+  if [ "${_az_rc}" = "0" ]; then
+    record_pass "anuncio-zero: (f) ZERO sem classe verificavel nao acusa (prosa comum)"
+  else record_fail "anuncio-zero: (f)" "falso positivo em prosa comum (rc=${_az_rc}): $(_emit "${_az_out}" | head -c 200)"; fi
+
+  # (g) ESCOPO: o mesmo texto em `_processed/` NÃO é julgado — já viajou, história não se reescreve.
+  rm -f "${ob}/alvo/2026-08-31-caso.md"
+  printf 'As portas\nestão OK (nenhuma sem prefixo de bind).\n' > "${ob}/alvo/_processed/2026-08-31-antigo.md"
+  _az
+  if [ "${_az_rc}" = "0" ] && grep -q 'SEM-OBJETO' <<< "${_az_out}"; then
+    record_pass "anuncio-zero: (g) anuncio em _processed/ fica FORA do escopo, e a guarda DECLARA SEM-OBJETO"
+  else record_fail "anuncio-zero: (g)" "escopo errado ou sem-objeto nao declarado (rc=${_az_rc}): $(_emit "${_az_out}" | head -c 200)"; fi
+
+  # (h) SEM-OBJETO é DECLARAÇÃO, não silêncio: zero anúncio ⇒ a guarda FALA que não julgou.
+  rm -f "${ob}/alvo/_processed/2026-08-31-antigo.md"
+  _az
+  if [ "${_az_rc}" = "0" ] && grep -q 'SEM-OBJETO' <<< "${_az_out}"; then
+    record_pass "anuncio-zero: (h) zero anuncio ⇒ SEM-OBJETO DECLARADO (guarda que nao sabe nunca afirma conformidade)"
+  else record_fail "anuncio-zero: (h)" "zero anuncio passou em silencio (rc=${_az_rc}): $(_emit "${_az_out}" | head -c 200)"; fi
+
+  # (i) sem git ⇒ rc=3 DECLARANDO, nunca conformidade por ausencia.
+  local ng ong orc=0; ng="$(mktemp -d)"
+  if ong="$(bash "${sut}" "${ng}" 2>&1)"; then orc=0; else orc=$?; fi
+  if [ "${orc}" = "3" ]; then
+    record_pass "anuncio-zero: (i) alvo sem git ⇒ rc=3 DECLARANDO"
+  else record_fail "anuncio-zero: (i)" "sem git nao recusou (rc=${orc}): $(_emit "${ong}" | head -c 200)"; fi
+  rm -rf "${ng}"
+}
+
+_family run_announce_zero_claim_selftests
+
+# ── A TABELA DE PROJEÇÕES REGENERADAS PELO HOOK ──────────────────────────────────────────────
+# POR QUE EXISTE: a classe "projeção gerada defasada no commit" barrou esta casa 3x num dia pelo
+# painel (R81) e QUATRO vezes em 2026-10-01 por projeções DIFERENTES (R39 lint-rules.md editado à
+# mão, R16 inventory.md, R80 testing-inventory.md, R62/R84 projeções de KG regeneradas ANTES de
+# estagiar). O maestro nomeou: lição que se repete é problema de MECANISMO. O bloco virou TABELA, e
+# esta família existe para que a tabela não PARE de cobrir em silêncio — cobertura sem teste é
+# promessa. Estrutura por asserção; comportamento do motor por EXECUÇÃO.
+run_hook_regen_table_selftests() {
+  local hook="${REPO_ROOT}/.githooks/pre-commit"
+  if [ ! -f "${hook}" ]; then record_fail "hook-regen" "hook ausente: ${hook}"; return; fi
+  if ! grep -q 'onion_regen ' "${hook}"; then
+    record_skip "hook-regen: tabela ausente do hook (bloco não encontrado)"; return
+  fi
+
+  # (a) ESTRUTURA — cada projeção que o lint cobra tem de ter linha na tabela. Se alguém acrescentar
+  #     uma guarda de projeção e esquecer a linha, a classe volta, e volta CALADA.
+  local missing="" pair
+  for pair in \
+    'docs/onion/testing-state.md|81' \
+    '.claude/validation/lint-rules.md|39' \
+    'docs/onion/testing-inventory.md|80' \
+    'docs/onion/inventory.md|8' \
+    'docs/onion/kg-read-index.tsv|84' \
+    'docs/backlog.md|62' \
+    'docs/onion/federation-console.html|24' \
+    'docs/onion/federation-map.md|38' \
+    'docs/onion/graph.md|21'; do
+    local target="${pair%%|*}" rule="${pair##*|}"
+    # ⚠️ MATCH ANCORADO, não substring. O `grep -qF "onion_regen ${target} ${rule}"` anterior era
+    # cego a NÚMERO ERRADO: um Elenxo provou que trocar `21` por `21x` deixava o caso VERDE, porque
+    # `onion_regen docs/onion/graph.md 21` é substring de `… 21x`. Só a DELEÇÃO da linha reprovava —
+    # ou seja, o caso cobria metade do que anunciava. A âncora exige o número seguido de espaço.
+    grep -qE "onion_regen[[:space:]]+${target//./\\.}[[:space:]]+${rule}[[:space:]]" "${hook}" \
+      || missing="${missing} ${target}(R${rule})"
+  done
+  # A LENTE é a 10ª, e não cabe no laço de pares fixos: o alvo é VARIÁVEL (um `*-radar.md` por
+  # grafo), então a tabela a regenera num laço. Aqui se cobra a existência da chamada com a regra.
+  # ⚠️ ANCORADO no fim do número, como os pares acima — e isto é reincidência registrada: a 1ª
+  # versão desta linha, escrita no MESMO patch que curou o substring dos pares, era ela mesma
+  # substring (`31` casa em `31DISABLED`). O mutante M3 passou verde e me pegou. A classe do
+  # vocabulário de guarda não perdoa quem acha que já aprendeu.
+  grep -qE 'onion_regen "\$\{_lens\}" 31([[:space:]]|$)' "${hook}" || missing="${missing} docs/**/*-radar.md(R31)"
+  if [ -z "${missing}" ]; then
+    record_pass "hook-regen: (a) as 10 projeções com guarda estão na tabela, com o número de regra CERTO"
+  else record_fail "hook-regen: (a)" "projeção com guarda e SEM linha (ou com regra errada) na tabela:${missing} — a classe volta calada"; fi
+
+  # (a2) O RE-CARIMBO DA REGRA 56 TEM DE ESTAR VIVO, e este caso nasceu porque ele estava MORTO:
+  #      a atribuição de `_RES_STAGED` havia sido apagada e o consumidor usava `${_RES_STAGED:-}`,
+  #      que cala o `set -u`. O bloco nunca executava e nada acusava. Consumidor de variável sem
+  #      atribuição no mesmo arquivo é a classe; o `:-` é o que a torna invisível.
+  if grep -qE '^[[:space:]]*_RES_STAGED=' "${hook}"; then
+    record_pass "hook-regen: (a2) o re-carimbo da REGRA 56 tem atribuição (não é código morto)"
+  else
+    record_fail "hook-regen: (a2) re-carimbo MORTO" \
+      "o hook consome _RES_STAGED e NUNCA o atribui — o bloco do carimbo não executa e o gate não sabe"
+  fi
+  # Só CÓDIGO: a 1ª redação deste caso acusou o próprio COMENTÁRIO que explica o defeito (o texto
+  # cita a forma errada de propósito). Guarda que não distingue código de prosa sobre código
+  # acusa a documentação da cura — e foi o que aconteceu na primeira execução.
+  # `awk`, SEM PIPE — e esta é a 2a vez no mesmo patch que uma cura minha trouxe a classe seguinte:
+  # a 1a redação era `grep -v … | grep -q …`, exatamente o `<produtor> | grep -q` que a catraca de
+  # pipefail barra (o `-q` fecha cedo, o produtor toma EPIPE e o veredito INVERTE com o padrão
+  # PRESENTE). Curei o substring trazendo o fechador precoce. Um processo, nenhum pipe, rc explícito.
+  if awk '!/^[[:space:]]*#/ && /\$\{_RES_STAGED:-\}/ { found = 1 } END { exit !found }' "${hook}"; then
+    record_fail "hook-regen: (a3) set -u calado" \
+      "o consumidor usa \${_RES_STAGED:-}, que transforma variável ausente em string vazia plausível — foi assim que o bloco morreu calado"
+  else
+    record_pass "hook-regen: (a3) o consumidor não cala o set -u com :- (variável ausente GRITA)"
+  fi
+
+  # (b) ORDEM — a tabela roda ANTES do re-carimbo da REGRA 56; auto-fix depois do carimbo torna o
+  #     hash caduco (ARTEFATO-CADUCO, medido 2x em 2026-10-01). O caso (b) de hook_chain_order cobra
+  #     o geral; aqui ancoramos a tabela especificamente.
+  local l_tab l_sha
+  l_tab="$(grep -n 'onion_regen ' "${hook}" | head -1 | cut -d: -f1)"
+  l_sha="$(grep -n 'reviewed_diff_sha256: .*_r56_sha' "${hook}" | head -1 | cut -d: -f1)"
+  if [ -n "${l_tab}" ] && [ -n "${l_sha}" ] && [ "${l_tab}" -lt "${l_sha}" ]; then
+    record_pass "hook-regen: (b) a tabela roda ANTES do re-carimbo do SHA da REGRA 56 (l.${l_tab} < l.${l_sha})"
+  else record_fail "hook-regen: (b)" "tabela (l.${l_tab:-?}) não precede o carimbo (l.${l_sha:-?}) — o hash nasceria caduco"; fi
+
+  # ── COMPORTAMENTO do motor, por EXECUÇÃO: extrai `_onion_regen` e exercita as 3 polaridades.
+  #    A bancada copia as OPÇÕES DE SHELL do runner ([[bancada-espelha-o-runner]]).
+  local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
+  git -C "${d}" init -q -b main 2>/dev/null || { record_fail "hook-regen" "git init falhou"; return; }
+  # SOURÇA A LIB REAL — recortar por âncora de `sed` foi reprovado pela guarda de âncora morta, e
+  # ela estava certa: a bancada exercita o artefato que o runner executa, nunca uma cópia recortada.
+  local lib="${REPO_ROOT}/.claude/validation/onion-regen-lib.sh"
+  if [ ! -r "${lib}" ]; then record_fail "hook-regen" "lib ausente: ${lib}"; return; fi
+  local fn="${d}/fn.sh"
+  # aspas SIMPLES dentro de DUPLAS: sem acrobacia de escape, que foi onde a 1ª forma quebrou
+  { printf '%s\n' 'set -uo pipefail' "REPO_ROOT='${d}'" "source '${lib}'"; } > "${fn}"
+  printf 'conteudo ANTIGO\n' > "${d}/target.txt"
+  git -C "${d}" add -A >/dev/null 2>&1
+
+  # (c) conteúdo DIFERENTE ⇒ regenera, anuncia e ESTAGIA (auto-fix com rastro)
+  local out _staged_list
+  out="$(cd "${d}" && bash -c 'source ./fn.sh; onion_regen target.txt 99 printf "conteudo NOVO\n"' 2>&1 || true)"
+  if grep -q 'NOVO' "${d}/target.txt" && grep -q '🔁' <<< "${out}" \
+     && { _staged_list="$(git -C "${d}" diff --cached --name-only)"; grep -qx 'target.txt' <<< "${_staged_list}"; }; then
+    record_pass "hook-regen: (c) conteúdo divergente ⇒ regenera, anuncia e ESTAGIA (rastro no commit)"
+  else record_fail "hook-regen: (c)" "não regenerou/anunciou/estagiou: $(_emit "${out}" | head -c 200)"; fi
+
+  # (d) MUTANTE DA SAÍDA DESTRUTIVA — gerador que FALHA não pode TRUNCAR o alvo. Redirecionar direto
+  #     no arquivo apagaria a projeção em vez de deixá-la defasada, e isso é PIOR.
+  out="$(cd "${d}" && bash -c 'source ./fn.sh; onion_regen target.txt 99 bash -c "exit 7"' 2>&1 || true)"
+  if [ -s "${d}/target.txt" ] && grep -q 'NÃO regenerado' <<< "${out}"; then
+    record_pass "hook-regen: (d) gerador que FALHA não trunca o alvo, e AVISA (temp+mv, rc lido)"
+  else record_fail "hook-regen: (d)" "alvo truncado ou falha silenciosa: tam=$(wc -c < "${d}/target.txt") out=$(_emit "${out}" | head -c 160)"; fi
+
+  # (e) gerador que sai VAZIO com rc=0 também não trunca — `[ -s ]` é a 2ª metade da guarda, porque
+  #     `exit 0` é declaração do script sobre si ([[exit-code-nao-e-a-verificacao]]).
+  out="$(cd "${d}" && bash -c 'source ./fn.sh; onion_regen target.txt 99 true' 2>&1 || true)"
+  if [ -s "${d}/target.txt" ] && grep -q 'NÃO regenerado' <<< "${out}"; then
+    record_pass "hook-regen: (e) gerador com rc=0 e saída VAZIA não trunca (o [ -s ] é load-bearing)"
+  else record_fail "hook-regen: (e)" "saída vazia com rc=0 truncou ou passou calada: $(_emit "${out}" | head -c 160)"; fi
+
+  # (f) conteúdo IDÊNTICO ⇒ silêncio total (nem anúncio, nem git add espúrio no commit)
+  out="$(cd "${d}" && bash -c 'source ./fn.sh; onion_regen target.txt 99 printf "conteudo NOVO\n"' 2>&1 || true)"
+  if [ -z "${out}" ]; then
+    record_pass "hook-regen: (f) conteúdo idêntico ⇒ silêncio (sem ruído nem estágio espúrio)"
+  else record_fail "hook-regen: (f)" "falou com conteúdo idêntico: $(_emit "${out}" | head -c 160)"; fi
+}
+
+_family run_hook_regen_table_selftests
+_family run_hook_chain_order_selftests
+_family run_corpus_grep_selftests
 _family run_research_workflow_selftests
 
 # Modo kg-scope — --scope do gate (insumo do /meta:kg backfill); protege a catraca canônica.
@@ -20431,6 +22357,15 @@ run_door_staleness_severity_selftests() {
   rm -rf "${d}"
 }
 _family run_door_staleness_severity_selftests
+_family run_guard_forge_selftests
+_family run_role_promotion_selftests
+_family run_r84_pathspec_selftests
+_family run_silent_measurer_selftests
+_family run_injected_cut_selftests
+_family run_cited_directive_selftests
+_family run_evolve_staleness_selftests
+_family run_evolve_census_selftests
+_family run_evolve_workflow_selftests
 
 
 

@@ -31,7 +31,7 @@ São as regras que o gate mecânico do Onion aplica a **todo repo da rede**: o m
 lint roda no core e em cada adotante. **HARD** bloqueia o merge; **SOFT** avisa, mas não
 bloqueia o CI.
 
-**91 regras** no total — **80 HARD**, **30 SOFT**.
+**95 regras** no total — **84 HARD**, **33 SOFT**.
 
 ## Frontmatter & conformidade de artefato
 
@@ -66,6 +66,7 @@ Tamanho saudável, nomes kebab-case, dialeto puro e links que resolvem.
 | 73 | Hook empacotado resolve no plugin instalado | HARD | hook morto e silencioso no plugin (script ausente, motor não embarcado, caminho $REPO/${CLAUDE_PLUGIN_ROOT}, matcher perdido) |
 | 74 | Caminho .claude/ NU dentro de plugin só resolve no core, com catraca | HARD + SOFT | comando/agente empacotado apontando .claude/{utils,commands,templates,…} que não viajou — ponteiro morto no consumidor |
 | 75 | Link markdown relativo dentro de plugin resolve no plugin | HARD | `[irmã](../kb/x.md)` num plugin apontando para arquivo que não viajou — 404 no consumidor |
+| 94 | MUTANTE esquecido na árvore | HARD + SOFT | teste de mutação que morre no meio e deixa o repo PIOR que antes |
 
 ## Fronteiras & contratos de arquitetura
 
@@ -117,6 +118,7 @@ Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, ma
 | 85 | Porta pública espelha o core, com catraca | HARD + SOFT | a porta MENTIR sobre o que o core é, por falta de re-materialização |
 | 90 | Prosa de comando conhece os papéis que o script aceita | SOFT | o par script×prosa dos comandos de co-evolução desencontrar — e ele JÁ desencontrou duas |
 | 92 | Papel da porta no registro concorda com o CARIMBO dela | HARD + SOFT | o materializador ler o papel ERRADO e cortar maquinaria da porta pública |
+| 96 | Diretiva de contexto INJETADO não corta listagem em silêncio | HARD | a projeção que o harness injeta é lida pela sessão COMO SE FOSSE o conjunto — não há |
 
 ## KG & proveniência
 
@@ -153,6 +155,7 @@ Classes de ação (HUMAN→MONITORED→DYNAMIC→AUTO) sobem de degrau com gate 
 |---:|-------|:----------:|---------------|
 | 44 | Integridade da escada de Automação Graduada | HARD | classe sobe de degrau sem gate de promoção alcançável (rung-jump forjado) |
 | 65 | Radar de mundo com baseline DATADA por eixo | HARD + SOFT | decidir estratégia com percepção externa vencida SEM AVISO — o modo-de-falha medido no |
+| 97 | A auto-auditoria do framework tem GATILHO | HARD + SOFT | o órgão de auto-evolução ficar parado sem ninguém ser avisado. DANO MEDIDO (2026-10-04): |
 
 ## Federação
 
@@ -166,6 +169,7 @@ Mapa, console, agent-card e canais de membro em sincronia com o SSOT da rede.
 | 38 | Mapa da federação (docs/onion/federation-map.md) sincronizado com members.yaml | HARD | mapa da federação driftando de members.yaml |
 | 46 | Canal da federação: diretório de outbox tem membro correspondente | SOFT | anúncio órfão — diretório de outbox cujo nome não é id de membro nunca é servido pelo pull, e some em silêncio |
 | 66 | Registro da federação validado no gate (members.yaml) | HARD | membro quebrado entrando calado no ledger — o M2 da spec m3-federation-admin |
+| 95 | Anúncio que afirma ZERO sobre classe verificável sem medição | HARD + SOFT | o ÚNICO documento que chega ANTES do merge desligar a ação do adotante com um zero em prosa |
 
 ## Projeção & privacidade
 

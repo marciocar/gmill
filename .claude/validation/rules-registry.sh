@@ -185,7 +185,7 @@ CATEGORIES = [
      [1, 2, 3, 12, 17, 23, 51]),
     ("Higiene de artefato",
      "Tamanho saudável, nomes kebab-case, dialeto puro e links que resolvem.",
-     [5, 6, 13, 14, 15, 22, 48, 60, 71, 72, 73, 74, 75]),
+     [5, 6, 13, 14, 15, 22, 48, 60, 71, 72, 73, 74, 75, 94]),
     ("Fronteiras & contratos de arquitetura",
      "Proibições estruturais, documentação no lugar certo e os contratos de conformance e de adoção.",
      [7, 18, 20, 40, 53, 77]),
@@ -194,7 +194,7 @@ CATEGORIES = [
      [10, 11]),
     ("SSOT anti-drift",
      "Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, mapas, plugins, topologia.",
-     [8, 9, 16, 19, 21, 27, 37, 39, 41, 50, 59, 62, 63, 70, 76, 80, 81, 83, 84, 85, 90, 92]),
+     [8, 9, 16, 19, 21, 27, 37, 39, 41, 50, 59, 62, 63, 70, 76, 80, 81, 83, 84, 85, 90, 92, 96]),
     ("KG & proveniência",
      "Conhecimento nasce no grafo e não morre em prosa; proveniência com catraca "
      "(por citação e por marcador autodeclarado); e frescor doutrinário — afirmação "
@@ -202,10 +202,10 @@ CATEGORIES = [
      [26, 29, 31, 32, 42, 43, 47, 49, 52, 55, 57, 58, 67, 68, 69, 78, 82, 87, 89, 93]),
     ("Automação Graduada",
      "Classes de ação (HUMAN→MONITORED→DYNAMIC→AUTO) sobem de degrau com gate de promoção alcançável — nenhum rung-jump forjado.",
-     [44, 65]),
+     [44, 65, 97]),
     ("Federação",
      "Mapa, console, agent-card e canais de membro em sincronia com o SSOT da rede.",
-     [24, 25, 28, 38, 46, 66]),
+     [24, 25, 28, 38, 46, 66, 95]),
     ("Projeção & privacidade",
      "O que pode sair para superfícies públicas ou vendorizadas — nome de cliente e "
      "deep-link privado nunca vazam (nem a HOME crua do source privado, num artefato de "

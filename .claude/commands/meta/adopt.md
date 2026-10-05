@@ -80,11 +80,10 @@ case "$ROLE_NOW" in
   adopted|"") : ;;  # o caso a promover
 esac
 # Re-carimba role: hub PRESERVANDO adopted_from/adopted_at/mode (write-stamp lê o stamp antigo).
-bash "$REPO/.claude/utils/adopt/write-stamp.sh" "$REPO" \
-  --framework "$(bash "$REPO/.claude/validation/onion-version.sh" | awk '/^framework:/{print $2}')" \
-  --commit "$(git -C "$REPO" rev-parse --short=12 HEAD)" \
-  --commit-date "$(git -C "$REPO" log -1 --format=%cd --date=short)" \
-  --role hub
+# SEM --framework/--commit/--commit-date de PROPÓSITO: identidade derivada de "$REPO" é do ALVO, não
+# do core — `--framework` carimbava o nome do repo do alvo e `--commit` um SHA fora da história do
+# core. Promover papel não muda versão: o write-stamp herda os três do stamp. Razão inteira lá.
+bash "$REPO/.claude/utils/adopt/write-stamp.sh" "$REPO" --role hub
 # REGRA 40: o stamp DEVE estar trackeado — commitar (force-add: é gitignored na herança da fonte).
 git -C "$REPO" add -f .claude/.onion-version
 git -C "$REPO" commit -q -m "chore(onion): promove a hub (role: hub) — autoridade de adoção local dos próprios projetos"
@@ -747,7 +746,7 @@ git -C "$SOURCE_ROOT" ls-tree HEAD -- .env.example | grep -q . && manifest+=(.en
   `onion/vendor` (fonte-de-merge, base comum) e faz `git merge` na integração → a customização local vira
   **conflito git real** (never-clobber estrutural), não diff clobável. **Exit 10 = CONFLITO** → o maestro
   resolve (`git mergetool`/marcadores + `git commit`) **antes** de seguir; **exit 0** = framework atualizado
-  limpo. (Adotante legado sem `onion/vendor` → o helper o **semeia** antes de mergear.) `.env.example` segue
+  limpo; **exit 12** = arquivo do core NÃO chegou à vendor (ex.: `.gitignore` cobrindo `.claude/`) — nada mergeado, PARE. (Adotante legado sem `onion/vendor` → o helper o **semeia** antes de mergear.) `.env.example` segue
   o never-clobber por-arquivo (grava `.env.example.onion` se o alvo já tem) — fora do merge, específico do alvo.
 - **Re-aplicar a configuração install-only** via o [⚙️ Procedimento de Configuração pós-cópia (idempotente)](#️-procedimento-de-configuração-pós-cópia-idempotente)
   (`DEST="$TARGET"`). **Crítico:** sem isto, um adotante com
