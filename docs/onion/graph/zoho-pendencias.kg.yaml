@@ -1,0 +1,88 @@
+---
+graph: zoho-pendencias
+title: "Zoho Projects — pendências da GMill (credenciais e LGPD do data center)"
+layer: audit
+created: 2026-10-05
+updated: 2026-10-05
+owner: gmill
+purpose: |
+  Resgate das duas perguntas abertas do plano-grafo da SAC-58 (PR #3, fechado sem merge em
+  2026-10-05 porque o core já entregou o provider como `.claude/utils/task-manager/adapters/zoho.md`).
+  O resto daquele grafo (adapter, detector, sinal upstream) foi superado pelo core; estas duas
+  perguntas não tinham casa na main. O grafo original segue na branch `feature/zoho-projects-provider`.
+  FORA DE ESCOPO, por decisão do maestro em 2026-10-05: o fluxo GLPI→Zoho e o risco de dado de
+  paciente/consumidor chegar a uma task. Não tratar aqui até o maestro reabrir.
+como_usar: |
+  Cada pergunta tem um nó de decisão com as opções e a sugestão. A sugestão é proposta, não decisão:
+  quem escolhe é o maestro (ou a GMill). DEPENDS_ON é guarda: a aresta sai do dependente.
+  Leia com: bash .claude/validation/kg-radar.sh docs/onion/graph/zoho-pendencias.kg.yaml
+---
+
+meta:
+  id: zoho-pendencias-gmill
+  schema_version: "1"
+  baseline: 2026-10-05
+  date: 2026-10-05
+  review_after: 2026-12-31
+
+nodes:
+  - id: Q_LGPD_ZOHO_DC
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.7
+    verified_at: 2026-10-05
+    verified_against: kb-zoho-projects-api-tabela-multi-dc-sem-dc-brasil
+    drive_kind: decision
+    label: "LGPD: em qual data center do Zoho os dados da GMill vão ficar, e com que base legal? A tabela de DCs da KB (US, EU, IN, AU, JP, CA, SA, UK, CN, UAE, SG) não tem Brasil, então qualquer escolha é transferência internacional (LGPD art. 33) e precisa de base para isso. O DC fica fixo na criação da conta Zoho [A VERIFICAR]: se a GMill já tem conta, a escolha já foi feita e a pergunta vira 'qual é, e está coberta?'."
+
+  - id: D_LGPD_ZOHO_DC
+    node_type: decision
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.6
+    verified_at: 2026-10-05
+    verified_against: opcoes-levantadas-em-sessao-2026-10-05-sem-parecer-juridico
+    drive_kind: decision
+    trace: docs/knowledge-base/platforms/zoho-projects-api.md
+    label: "OPÇÕES — (A) Aceitar DC fora do Brasil (US ou EU) com base no art. 33 via cláusulas-padrão contratuais da ANPD (Res. CD/ANPD nº 19/2024 [A VERIFICAR]) no DPA da Zoho, e minimizar o conteúdo das tasks (dado pessoal só de colaborador: nome, e-mail). (B) Preferir o DC EU por estar sob GDPR; ajuda na prática, mas não dispensa base do art. 33 enquanto não houver adequação ANPD↔UE [A VERIFICAR]. (C) Não usar Zoho para nada com dado pessoal, ou buscar ferramenta hospedada no Brasil. SUGESTÃO: (A). Passos: 1) descobrir se a GMill já tem conta Zoho e em qual DC; 2) conferir se o DPA da Zoho cobre as cláusulas da ANPD; 3) registrar a operação no inventário de tratamento (ROPA); 4) manter a regra de conteúdo mínimo nas tasks. Sem parecer jurídico ainda; validar com o DPO/jurídico da GMill antes de produção."
+
+  - id: Q_ZOHO_CREDENTIALS
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 5
+    confidence: 1.0
+    verified_at: 2026-10-05
+    verified_against: env-sem-variaveis-ZOHO-e-adapter-zoho-md-exige-client-id-secret-portal-id
+    drive_kind: decision
+    trace: .claude/utils/task-manager/adapters/zoho.md
+    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado."
+
+  - id: D_ZOHO_CREDENTIALS
+    node_type: decision
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.7
+    verified_at: 2026-10-05
+    verified_against: opcoes-levantadas-em-sessao-2026-10-05-contra-zoho-md-e-kb
+    drive_kind: decision
+    trace: .claude/utils/task-manager/adapters/zoho.md
+    label: "OPÇÕES — (A) Self client criado no portal da GMill por um admin da GMill, ligado a um usuário de serviço (não a conta pessoal de alguém), com os 5 escopos do zoho.md e nada além. (B) App OAuth server-based com redirect_uri; só se justifica com vários usuários ou várias orgs, o que não é o caso. (C) Validar antes num portal de teste (trial) fora da GMill; prova o adapter, mas não o portal real, e cria dado fora da GMill. SUGESTÃO: (A), depois de fechar o DC (D_LGPD_ZOHO_DC), porque ZOHO_ACCOUNTS_HOST depende dele. Os segredos ficam no .env local, nunca commitados, e quem gera é a GMill: o repo não guarda nem repete credencial."
+
+edges:
+  - from: Q_LGPD_ZOHO_DC
+    to: D_LGPD_ZOHO_DC
+    edge_type: DEPENDS_ON
+    label: "A pergunta só fecha quando o maestro escolher uma das opções."
+  - from: Q_ZOHO_CREDENTIALS
+    to: D_ZOHO_CREDENTIALS
+    edge_type: DEPENDS_ON
+    label: "A pergunta só fecha quando o maestro escolher uma das opções."
+  - from: D_ZOHO_CREDENTIALS
+    to: D_LGPD_ZOHO_DC
+    edge_type: DEPENDS_ON
+    label: "ZOHO_ACCOUNTS_HOST é o host do DC: gerar credencial antes de fechar o DC é trabalho que pode ser refeito."
