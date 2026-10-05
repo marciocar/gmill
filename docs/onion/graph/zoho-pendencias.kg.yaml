@@ -56,10 +56,10 @@ nodes:
     impact: 5
     confidence: 1.0
     verified_at: 2026-10-05
-    verified_against: pass-ls-zoho-projects-6-entradas-conteudo-nao-lido-gpg-bloqueado
+    verified_against: get-api-v3-portals-1-portal-pessoal-id-bate-com-pass-dc-us
     drive_kind: decision
     trace: .claude/utils/task-manager/adapters/zoho.md
-    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado. LOCALIZADAS em 2026-10-05 no password-store do maestro, em zoho/projects/ (client_id, client_secret, portal_id, refresh_token, portal_login_id, how-to-get-token). Ainda não conferido: se o portal é o da GMill e qual é o DC (não há entrada para o accounts host)."
+    label: "Faltam as credenciais Zoho da GMill para ativar TASK_MANAGER_PROVIDER=zoho. O adapter do core (zoho.md) usa Self client com client_credentials, que dispensa refresh_token: precisa de ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_PORTAL_ID e ZOHO_ACCOUNTS_HOST (o host do DC). O adapter foi medido contra um portal real em 2026-09-30, mas o arquivo não diz de quem; o portal da GMill não foi testado. LOCALIZADAS em 2026-10-05 no password-store do maestro, em zoho/projects/ (client_id, client_secret, portal_id, refresh_token, portal_login_id, how-to-get-token). MEDIDO em 2026-10-05 (token client_credentials com escopo portals.READ, GET /api/v3/portals): a credencial funciona, o DC é US (accounts.zoho.com, conforme a nota how-to-get-token) e o ÚNICO portal visível é o pessoal do maestro, cujo id bate com o portal_id do pass. NÃO é o portal da GMill: serve para validar o adapter (opção C), não para operar a GMill."
 
   - id: D_ZOHO_CREDENTIALS
     node_type: decision
@@ -71,7 +71,7 @@ nodes:
     verified_against: opcoes-levantadas-em-sessao-2026-10-05-contra-zoho-md-e-kb
     drive_kind: decision
     trace: .claude/utils/task-manager/adapters/zoho.md
-    label: "OPÇÕES — (A) Self client criado no portal da GMill por um admin da GMill, ligado a um usuário de serviço (não a conta pessoal de alguém), com os 5 escopos do zoho.md e nada além. (B) App OAuth server-based com redirect_uri; só se justifica com vários usuários ou várias orgs, o que não é o caso. (C) Validar antes num portal de teste (trial) fora da GMill; prova o adapter, mas não o portal real, e cria dado fora da GMill. SUGESTÃO: (A). As credenciais já existem no pass (ver Q_ZOHO_CREDENTIALS), então o DC já está dado por elas: registrar qual é, sem esperar a decisão de LGPD, que foi adiada. Os segredos ficam no .env local, nunca commitados, e quem gera é a GMill: o repo não guarda nem repete credencial."
+    label: "OPÇÕES — (A) Self client criado no portal da GMill por um admin da GMill, ligado a um usuário de serviço (não a conta pessoal de alguém), com os 5 escopos do zoho.md e nada além. (B) App OAuth server-based com redirect_uri; só se justifica com vários usuários ou várias orgs, o que não é o caso. (C) Validar antes num portal de teste (trial) fora da GMill; prova o adapter, mas não o portal real, e cria dado fora da GMill. SUGESTÃO: (A) para operar a GMill. A credencial do pass (ver Q_ZOHO_CREDENTIALS) já é a opção (C) na prática: portal pessoal do maestro, DC US. Use-a para validar o adapter e peça à GMill o Self client do portal dela. Os segredos ficam no .env local, nunca commitados, e quem gera é a GMill: o repo não guarda nem repete credencial."
 
 edges:
   - from: Q_LGPD_ZOHO_DC
