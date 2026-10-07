@@ -176,13 +176,17 @@ SELFTEST_LIST=0; SELFTEST_MAP=0; SELFTEST_TIMING="${ONION_SELFTEST_TIMING:-0}"
 SELFTEST_JOBS="${ONION_SELFTEST_JOBS:-1}"; SELFTEST_FAMILIES="${ONION_SELFTEST_FAMILIES:-}"
 SELFTEST_CHILD="${ONION_SELFTEST_CHILD:-0}"; SELFTEST_AFFECTED=(); SELFTEST_AFFECTED_STAGED=0; SELFTEST_DRY=0
 SELFTEST_QUEUE="${ONION_SELFTEST_QUEUE:-}"; SELFTEST_SHARD="${ONION_SELFTEST_SHARD:-}"
+# FAIXA DA MATRIZ para a família `fixtures` (2026-10-05): ela é ~1600 s de CPU no runner de 2 núcleos e,
+# presa numa faixa só, estourou o teto de 25 min três vezes no PR #927. i/n = esta faixa roda as linhas
+# do manifest cujo índice % n == i; dentro dela, o SHARD dos workers fatia o que sobrou.
+SELFTEST_FIXTURES_LANE="${ONION_SELFTEST_FIXTURES_LANE:-}"
 # papel do repo (core | adopted): lido do stamp; ausente = core. Famílias/fixtures core-only pulam com ⊘ no adotante.
 SELFTEST_ROLE="$(awk -F': *' '/^role:/{print $2; exit}' "${REPO_ROOT}/.claude/.onion-version" 2>/dev/null || true)"
 SELFTEST_CORE_ONLY_FAMILIES="testing_state,ci_evidence,selftest_series,harness_inventory,resolve_target,kg_coverage,backlog_projection,radar_staleness,members_registry,research_lens,research_workflow,reconcile_inputs,regen_baselines,capability,role_bundle,outbox_channel,moat_boundary,materialize_repo,rules_registry"
 # HERMÉTICA POR CONSTRUÇÃO (mesma doutrina do unset de GIT_DIR acima): as variáveis de worker foram CONSUMIDAS;
 # se ficassem exportadas, uma família que invoca a bancada (selftest_lanes) herdaria fila/shard/child do pai e a
 # bancada aninhada viraria um worker mudo — foi o que matou o worker 4 no 3º dogfood (2026-09-03).
-unset ONION_SELFTEST_CHILD ONION_SELFTEST_QUEUE ONION_SELFTEST_SHARD ONION_SELFTEST_FAMILIES ONION_SELFTEST_TIMING ONION_SELFTEST_JOBS
+unset ONION_SELFTEST_CHILD ONION_SELFTEST_QUEUE ONION_SELFTEST_SHARD ONION_SELFTEST_FAMILIES ONION_SELFTEST_TIMING ONION_SELFTEST_JOBS ONION_SELFTEST_FIXTURES_LANE
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) SELFTEST_LIST=1 ;;
@@ -406,6 +410,7 @@ if [ "${SELFTEST_JOBS}" -gt 1 ] && [ "${SELFTEST_CHILD}" = "0" ] && [ "${SELFTES
     for (( i=0; i<_j; i++ )); do
       ONION_SELFTEST_CHILD=1 ONION_SELFTEST_FAMILIES="${_all_csv}" ONION_SELFTEST_STRICT="${STRICT}" \
         ONION_SELFTEST_QUEUE="${_tdir}/q" ONION_SELFTEST_SHARD="${i}/${_j}" ONION_SELFTEST_TIMING="${SELFTEST_TIMING}" \
+        ONION_SELFTEST_FIXTURES_LANE="${SELFTEST_FIXTURES_LANE}" \
         bash "${BASH_SOURCE[0]}" --child > "${_tdir}/${i}.out" 2>&1 &
       _pids[i]=$!
     done
@@ -4020,6 +4025,19 @@ run_merge_fixture() {
   lost="$(jq -nr --argjson ref "$(cat "${tgt}")" --argjson out "${out}" "${diff_jq}")"
   if [ -n "${lost}" ]; then record_fail "${fixture}" "hook próprio do alvo PERDIDO (clobber): ${lost}"; return; fi
 
+  # attribution: ausente no alvo → chega o da fonte; presente no alvo → fica o do alvo (never-clobber)
+  local attr_ok
+  attr_ok="$(jq -nr --argjson s "$(cat "${src}")" --argjson t "$(cat "${tgt}")" --argjson o "${out}" '
+    if $s.attribution == null then "ok"
+    elif $t.attribution == null then (if $o.attribution == $s.attribution then "ok" else "attribution da fonte NAO chegou ao alvo" end)
+    else (if $o.attribution == $t.attribution then "ok" else "attribution PROPRIO do alvo foi sobrescrito (clobber)" end) end')"
+  if [ "${attr_ok}" != ok ]; then record_fail "${fixture}" "${attr_ok}"; return; fi
+  case "${fixture}" in *own-attribution*)
+    local _warn_out; _warn_out="$(bash "${helper}" "${src}" "${tgt}" 2>&1 >/dev/null || true)"   # here-string: nada de produtor|grep -q
+    grep -q 'AVISO: o attribution do alvo difere' <<< "${_warn_out}" \
+      || { record_fail "${fixture}" "attribution divergente sem o AVISO no stderr"; return; } ;;
+  esac
+
   local tmp out2
   tmp="$(mktemp)"; printf '%s' "${out}" > "${tmp}"
   out2="$(bash "${helper}" "${src}" "${tmp}" 2>/dev/null)"; rm -f "${tmp}"
@@ -4229,6 +4247,132 @@ run_resolve_production_selftests() {
     record_fail "resolve-production: repo sem remote/commits" "esperava exit 0, veio ${RP_RC} (out='${RP_OUT}' err='${RP_ERR}')"
   fi
 
+
+  # (7) GitFlow RETOMADO (sinal de campo de um hub, 2026-10-05): develop recriada da master e MAIS RECENTE,
+  #     origin/HEAD→develop, integração onion/develop, sem config → "master". A recência elegia "develop".
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  git -C "${d}" symbolic-ref HEAD refs/heads/zzz-local
+  GIT_COMMITTER_DATE="2026-01-01T00:00:00" git -C "${d}" commit -q --allow-empty -m velho
+  old_sha="$(git -C "${d}" rev-parse HEAD)"
+  GIT_COMMITTER_DATE="2026-10-01T00:00:00" git -C "${d}" commit -q --allow-empty -m novo
+  new_sha="$(git -C "${d}" rev-parse HEAD)"
+  git -C "${d}" update-ref refs/remotes/origin/master "${old_sha}"
+  git -C "${d}" update-ref refs/remotes/origin/develop "${new_sha}"
+  git -C "${d}" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
+  _rp_run "${d}" --integration onion/develop
+  if [ "${RP_OUT}" = "master" ]; then
+    record_pass "resolve-production: GitFlow retomado (develop mais nova, origin/HEAD→develop) → master, não a recência"
+  else
+    record_fail "resolve-production: GitFlow retomado" "esperava 'master', veio out='${RP_OUT}' err='${RP_ERR}'"
+  fi
+  # (8) config ENVENENADO (= origin/HEAD) não vira autoridade, no mesmo repo → segue "master"
+  git -C "${d}" config gitflow.branch.master develop
+  _rp_run "${d}" --integration onion/develop
+  if [ "${RP_OUT}" = "master" ]; then
+    record_pass "resolve-production: config com a assinatura do veneno (= origin/HEAD) é ignorado → master"
+  else
+    record_fail "resolve-production: config envenenado" "esperava 'master', veio out='${RP_OUT}'"
+  fi
+  # (9) config LEGÍTIMO com nome não-canônico vence a heurística (produção chamada 'production')
+  git -C "${d}" update-ref refs/remotes/origin/production "${old_sha}"
+  git -C "${d}" config gitflow.branch.master production
+  _rp_run "${d}" --integration onion/develop
+  rm -rf "${d}"
+  if [ "${RP_OUT}" = "production" ]; then
+    record_pass "resolve-production: gitflow.branch.master já configurado (ref existe, sem veneno) é a autoridade"
+  else
+    record_fail "resolve-production: config como autoridade" "esperava 'production', veio out='${RP_OUT}'"
+  fi
+
+
+  # (10) FALSO POSITIVO que derrubou a 1ª cura (Elenxo 2026-10-06): produção REAL é o origin/HEAD com nome
+  #      não-canônico (`production`, mais nova) e há `master` parada, sem config → "production", não "master"
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  git -C "${d}" symbolic-ref HEAD refs/heads/zzz-local
+  GIT_COMMITTER_DATE="2026-01-01T00:00:00" git -C "${d}" commit -q --allow-empty -m velho
+  old_sha="$(git -C "${d}" rev-parse HEAD)"
+  GIT_COMMITTER_DATE="2026-10-01T00:00:00" git -C "${d}" commit -q --allow-empty -m novo
+  new_sha="$(git -C "${d}" rev-parse HEAD)"
+  git -C "${d}" update-ref refs/remotes/origin/master "${old_sha}"
+  git -C "${d}" update-ref refs/remotes/origin/production "${new_sha}"
+  git -C "${d}" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/production
+  _rp_run "${d}" --integration develop
+  if [ "${RP_OUT}" = "production" ]; then
+    record_pass "resolve-production: origin/HEAD não-canônico (production) com master parada → production"
+  else
+    record_fail "resolve-production: production não-canônica" "esperava 'production', veio out='${RP_OUT}'"
+  fi
+  # (11) config setado à mão IGUAL ao origin/HEAD (production) é respeitado — a 1ª cura o tratava como veneno
+  git -C "${d}" config gitflow.branch.master production
+  _rp_run "${d}" --integration develop
+  if [ "${RP_OUT}" = "production" ] && [ -z "${RP_ERR}" ]; then
+    record_pass "resolve-production: config à mão igual ao origin/HEAD é respeitado (não é veneno)"
+  else
+    record_fail "resolve-production: config à mão = origin/HEAD" "esperava 'production' sem aviso, veio out='${RP_OUT}' err='${RP_ERR}'"
+  fi
+  # (12) config para branch INEXISTENTE: ignorado COM aviso (antes: silêncio e a adoção sobrescrevia)
+  git -C "${d}" config gitflow.branch.master prod-que-nao-existe
+  _rp_run "${d}" --integration develop
+  rm -rf "${d}"
+  if [ "${RP_OUT}" = "production" ] && grep -q 'não existe como branch' <<< "${RP_ERR}"; then
+    record_pass "resolve-production: config para branch inexistente é ignorado e DECLARADO no stderr"
+  else
+    record_fail "resolve-production: config inexistente" "out='${RP_OUT}' err='${RP_ERR}'"
+  fi
+  # (13) config envenenado vira autoridade quando o origin/HEAD é CONSERTADO? (1ª cura: sim) → não, segue master
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  git -C "${d}" symbolic-ref HEAD refs/heads/zzz-local
+  git -C "${d}" commit -q --allow-empty -m base
+  sha="$(git -C "${d}" rev-parse HEAD)"
+  git -C "${d}" update-ref refs/remotes/origin/master "${sha}"
+  git -C "${d}" update-ref refs/remotes/origin/develop "${sha}"
+  git -C "${d}" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+  git -C "${d}" config gitflow.branch.master develop
+  _rp_run "${d}" --integration onion/develop
+  rm -rf "${d}"
+  if [ "${RP_OUT}" = "master" ]; then
+    record_pass "resolve-production: config 'develop' com origin/HEAD já consertado continua ignorado → master"
+  else
+    record_fail "resolve-production: veneno após conserto do origin/HEAD" "esperava 'master', veio out='${RP_OUT}'"
+  fi
+
+  # (14) F1 — trunk-based por design: config=main, integração main, só main → "main" SEM aviso
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  git -C "${d}" symbolic-ref HEAD refs/heads/main
+  git -C "${d}" commit -q --allow-empty -m base
+  git -C "${d}" config gitflow.branch.master main
+  _rp_run "${d}" --integration main
+  rm -rf "${d}"
+  if [ "${RP_OUT}" = "main" ] && [ -z "${RP_ERR}" ]; then
+    record_pass "resolve-production: trunk-based com config=main=integração → main SEM falso alarme"
+  else
+    record_fail "resolve-production: trunk-based com config" "esperava 'main' sem stderr, veio out='${RP_OUT}' err='${RP_ERR}'"
+  fi
+  # (15) F2 — rename master→main sem prune, config velho 'master': o config vale, mas a divergência é ANUNCIADA
+  d="$(mktemp -d)"; git -C "${d}" init -q
+  git -C "${d}" symbolic-ref HEAD refs/heads/zzz-local
+  GIT_COMMITTER_DATE="2026-01-01T00:00:00" git -C "${d}" commit -q --allow-empty -m velho
+  old_sha="$(git -C "${d}" rev-parse HEAD)"
+  GIT_COMMITTER_DATE="2026-10-01T00:00:00" git -C "${d}" commit -q --allow-empty -m novo
+  new_sha="$(git -C "${d}" rev-parse HEAD)"
+  git -C "${d}" update-ref refs/remotes/origin/master "${old_sha}"
+  git -C "${d}" update-ref refs/remotes/origin/main "${new_sha}"
+  git -C "${d}" config gitflow.branch.master master
+  _rp_run "${d}" --integration develop
+  if [ "${RP_OUT}" = "master" ] && grep -q 'heurística elegeria "main"' <<< "${RP_ERR}"; then
+    record_pass "resolve-production: config velho (master) vale, e a heurística divergente (main) é ANUNCIADA"
+  else
+    record_fail "resolve-production: config velho em silêncio" "out='${RP_OUT}' err='${RP_ERR}'"
+  fi
+  # (16) F4 — `HEAD` não é config de produção
+  git -C "${d}" config gitflow.branch.master HEAD
+  _rp_run "${d}" --integration develop
+  rm -rf "${d}"
+  if [ "${RP_OUT}" = "main" ] && grep -q 'não é nome de branch' <<< "${RP_ERR}"; then
+    record_pass "resolve-production: gitflow.branch.master=HEAD é recusado com aviso"
+  else
+    record_fail "resolve-production: config HEAD" "out='${RP_OUT}' err='${RP_ERR}'"
+  fi
   unset -f _rp_run
 }
 
@@ -4357,6 +4501,25 @@ run_durable_commit_selftests() {
   else record_fail "durable-commit: (g3) nome dificil" "rc=${_rc}; $(git -C "${d}" ls-tree -r --name-only HEAD -- .claude/kb | tr '\n' ' ')"; fi
   rm -rf "${d}" "${_req}"
 
+  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+  # (f) ASSINATURA do adotante no commit (2026-10-06): attribution.commit do settings.json DELE
+  # IDENTIDADE PARA O CASO INTEIRO: ele roda depois do `unset` da família, e tanto o `_dc_setup` quanto o
+  # helper fazem `git commit`. O CI abortou DUAS vezes com "empty ident name": a 1ª cura cobria só o helper,
+  # e a conferência local com HOME vazio não reproduzia o runner — aqui o git cai no nome do usuário do
+  # sistema, e no runner esse nome é vazio.
+  export GIT_AUTHOR_NAME=onion-selftest GIT_AUTHOR_EMAIL=ci@onion.test \
+         GIT_COMMITTER_NAME=onion-selftest GIT_COMMITTER_EMAIL=ci@onion.test
+  _dc_setup
+  mkdir -p "${d}/.claude"; printf '{"attribution":{"commit":"Assinado pelo adotante X"}}\n' > "${d}/.claude/settings.json"
+  # identidade NA CHAMADA: este caso roda depois do `unset` da família, e o CI não tem identidade git global
+  # (o 1º push abortou a faixa 4 com "empty ident name"; local passava pela identidade global da máquina)
+  GIT_AUTHOR_NAME=onion-selftest GIT_AUTHOR_EMAIL=ci@onion.test GIT_COMMITTER_NAME=onion-selftest GIT_COMMITTER_EMAIL=ci@onion.test \
+    bash "${helper}" "${d}" update NEW999 chore/onion-update-NEW999 >/dev/null 2>&1
+  local _body; _body="$(git -C "${d}" log -1 --format=%B)"
+  if grep -qxF 'Assinado pelo adotante X' <<< "${_body}"; then
+    record_pass "durable-commit: (f) o commit de adoção leva a assinatura do PRÓPRIO adotante"
+  else record_fail "durable-commit: (f) assinatura" "o commit saiu sem a attribution.commit do adotante"; fi
+  rm -rf "${d}"
   unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 }
 
@@ -5774,6 +5937,364 @@ run_pretooluse_veto_selftests() {
 }
 
 # ---------------------------------------------------------------------------
+# Modo pre-push + pr-finalize (2026-10-05) — o fechamento de PR na ordem certa e o gatilho que o cobra.
+# Defeito datado: num dia, #923 e #925 foram ao CI com o painel defasado (REGRA 81) e #924 foi enviado com
+# "Violações HARD : 2" porque o encadeamento lia a PRESENÇA da linha. O hook roda com lint STUB (ponto de
+# teste, só com ONION_PREPUSH_TEST=1); o lint real é exercido pelo dogfood. Casos do Elenxo (2ª forma):
+# worktree POSITIVA (o mutante que trocava o `worktree add` sobrevivia), gh FALHANDO (B3), marcador.
+# ---------------------------------------------------------------------------
+# ═══════════════════════════════════════════════════════════════════════════════
+# env_exposure — o .env nunca chega ao modelo (sinal de campo de um hub, dogfood do Zoho, 2026-10-05)
+# O setup-integration mandava ler o .env com Read "sem expor valores" — e Read expõe tudo; 40 comandos/
+# projeções liberavam `Bash(cat .env*)`. A cura é o helper env-check.sh (devolve NOMES e o provider, nunca
+# valores) e esta família: ela reprova (a) o helper vazando um segredo-sentinela e (b) qualquer volta do
+# padrão no corpus de comandos, agentes, skills e plugins.
+# ═══════════════════════════════════════════════════════════════════════════════
+run_env_exposure_selftests() {
+  local h="${REPO_ROOT}/.claude/utils/task-manager/env-check.sh"
+  if [ ! -f "${h}" ]; then record_fail "env-exposure" "helper ausente: ${h}"; return; fi
+  local d; d="$(mktemp -d)"
+  printf 'TASK_MANAGER_PROVIDER=jira\nZOHO_CLIENT_ID=SENTINELA-S1\nZOHO_CLIENT_SECRET=SENTINELA-S2\nZOHO_PORTAL_ID=SENTINELA-S3\n' > "${d}/.env"
+  local out rc
+  rc=0; out="$( { bash "${h}" --env "${d}/.env" --provider; bash "${h}" --env "${d}/.env" --check zoho; } 2>&1)" || rc=$?
+  if grep -q SENTINELA <<< "${out}"; then record_fail "env-exposure: (a) helper vazou valor" "$(grep -m1 SENTINELA <<< "${out}")"
+  elif [ "${rc}" = 0 ] && grep -qx jira <<< "${out}" && grep -q '✅ ZOHO_PORTAL_ID' <<< "${out}"; then record_pass "env-exposure: (a) --provider e --check devolvem nomes e o provider, nunca o valor"
+  else record_fail "env-exposure: (a) --provider/--check" "rc=${rc}: ${out:0:160}"; fi
+  rc=0; out="$(bash "${h}" --env "${d}/.env" --set-provider zoho 2>&1)" || rc=$?
+  if [ "${rc}" = 0 ] && grep -qx 'TASK_MANAGER_PROVIDER=zoho' "${d}/.env" && grep -q 'jira → zoho' <<< "${out}" && grep -q 'SENTINELA-S1' "${d}/.env" && ! grep -q SENTINELA <<< "${out}"; then
+    record_pass "env-exposure: (b) --set-provider troca SÓ o provider, avisa a troca e preserva as outras chaves"
+  else record_fail "env-exposure: (b) --set-provider" "rc=${rc}: ${out:0:160}"; fi
+  rc=0; bash "${h}" --env "${d}/.env" --check clickup >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" = 1 ]; then record_pass "env-exposure: (c) chave obrigatória ausente → rc=1"; else record_fail "env-exposure: (c) ausência" "rc=${rc} (esperado 1)"; fi
+  rc=0; bash "${h}" --env "${d}/nao-existe" --check >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" = 3 ]; then record_pass "env-exposure: (d) .env ausente → rc=3 (declara, não finge vazio)"; else record_fail "env-exposure: (d) .env ausente" "rc=${rc} (esperado 3)"; fi
+  rm -rf "${d}"
+  # (e) o padrão não volta: Read .env no corpo ou `cat .env` liberado em comando/agente/skill/plugin
+  local hits
+  hits="$(cd "${REPO_ROOT}" && git ls-files -- '.claude/commands' '.claude/agents' '.claude/skills' 'plugins' 2>/dev/null \
+          | grep '\.md$' | xargs -r grep -lE 'Read \.env([^.]|$)|Read`? para ler `?\.env|Bash\((cat|grep|head|tail|less|source) [^)]*\.env' 2>/dev/null || true)"
+  grep -qE 'Bash\((cat|grep|head|tail|less)[^)]*\.env' "${REPO_ROOT}/.claude/settings.json" && hits="${hits} .claude/settings.json"
+  if [ -z "${hits}" ]; then record_pass "env-exposure: (e) nenhum comando/agente/skill/plugin manda ler o .env com Read ou libera cat .env"
+  else record_fail "env-exposure: (e) o padrão voltou" "$(printf '%s' "${hits}" | tr '\n' ' ' | cut -c1-200)"; fi
+  # (g) helper — achados do Elenxo: ambiente antes do arquivo, --get só para NÃO-segredo, provider inválido não ecoa
+  local e2; e2="$(mktemp -d)"
+  printf 'export TASK_MANAGER_PROVIDER=SENTINELA-PROV\nZOHO_CLIENT_SECRET=SENTINELA-SEC\nCLICKUP_DEFAULT_LIST_ID=901\nJIRA_HOST=https://bob:SENTINELA-URL@acme.atlassian.net\n' > "${e2}/.env"
+  local g1 g2 g3 g4 g5
+  g1="$(TASK_MANAGER_PROVIDER=linear bash "${h}" --env "${e2}/nada" --provider 2>&1)"
+  g2="$(bash "${h}" --env "${e2}/.env" --provider 2>&1)"
+  g3="$(bash "${h}" --env "${e2}/.env" --get CLICKUP_DEFAULT_LIST_ID 2>&1)"
+  local g6; g6="$(bash "${h}" --env "${e2}/.env" --get JIRA_HOST 2>&1)"
+  rc=0; g4="$(bash "${h}" --env "${e2}/.env" --get ZOHO_CLIENT_SECRET 2>&1)" || rc=$?
+  g5="$(bash "${h}" --env "${e2}/.env" --set-provider 'jira clickup' 2>&1)" || true
+  rm -rf "${e2}"
+  if [ "${g1}" = linear ] && [ "${g2}" = invalido ] && [ "${g3}" = 901 ] && [ "${rc}" = 2 ] && ! grep -q SENTINELA <<< "${g1}${g2}${g3}${g4}${g5}${g6}" && [ "${g6}" = "https://***@acme.atlassian.net" ] && grep -q desconhecido <<< "${g5}"; then
+    record_pass "env-exposure: (g) ambiente antes do arquivo; --get recusa segredo; provider inválido e injeção não ecoam"
+  else record_fail "env-exposure: (g) helper" "g1=${g1} g2=${g2} g3=${g3} rc_get=${rc} g5=${g5:0:60}"; fi
+  # (h) o VETO (pretooluse-env-guard.sh): as duas polaridades — o que lê o .env é barrado (exit 2), o caminho certo passa
+  local guard="${REPO_ROOT}/.claude/hooks/pretooluse-env-guard.sh"
+  if [ ! -f "${guard}" ]; then record_fail "env-exposure: (h) veto" "ausente: ${guard}"
+  else
+    _eg() { local rc=0; printf '%s' "$1" | bash "${guard}" >/dev/null 2>&1 || rc=$?; printf '%s' "${rc}"; }
+    local bad=0 c
+    for c in 'cat .env' 'head -3 ./.env' 'grep -q KEY .env' 'x=$(cat .env)' 'tail < .env' 'bash -c "less .env"' \
+             'sudo cat /srv/app/.env' 'cat .env.local' 'cp .env /tmp/x' 'eval "cat .env"' 'cat "aberto .env'; do
+      [ "$(_eg "$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$c")")" = 2 ] || { bad=1; record_fail "env-exposure: (h) veto deixou passar" "${c}"; }
+    done
+    for c in 'set -a; source .env; set +a' '. .env' 'bash .claude/utils/task-manager/env-check.sh --provider' 'test -f .env' \
+             'git ls-files --error-unmatch .env' 'cp .env.example .env' "printf 'X=1\\n' >> .env" 'cat .env.example' 'cat .envrc' \
+             'grep -q "^\.env$" .gitignore' 'echo "configure o .env"'; do
+      [ "$(_eg "$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$c")")" = 0 ] || { bad=1; record_fail "env-exposure: (h) veto barrou caminho honesto" "${c}"; }
+    done
+    [ "$(_eg '{"tool_name":"Read","tool_input":{"file_path":"/x/.env"}}')" = 2 ] || { bad=1; record_fail "env-exposure: (h) veto" "Read de .env passou"; }
+    [ "$(_eg '{"tool_name":"Grep","tool_input":{"pattern":"T","path":".env"}}')" = 2 ] || { bad=1; record_fail "env-exposure: (h) veto" "Grep em .env passou"; }
+    [ "$(_eg '{"tool_name":"Read","tool_input":{"file_path":"/x/.env.example"}}')" = 0 ] || { bad=1; record_fail "env-exposure: (h) veto" "Read de .env.example barrado"; }
+    [ "${bad}" = 0 ] && record_pass "env-exposure: (h) o veto barra 13 leituras do .env e deixa passar 14 caminhos honestos"
+  fi
+  # (h2) escapes e falsos positivos da 2ª passada do Elenxo (2026-10-06)
+  if [ -f "${guard}" ]; then
+    local bad2=0 c2 j
+    _ej() { python3 -c 'import json,sys;print(json.dumps({"tool_name":sys.argv[1],"tool_input":json.loads(sys.argv[2])}))' "$1" "$2"; }
+    for c2 in $'test -f .env\ncat .env' $'git status\ncat .env' $'source .env\nenv' 'git diff --no-index .env.example .env' \
+              'git show :.env' 'cat .e*' 'cat {.env,}' 'grep -rn T --include=*.env .' "python3 -c 'print(open(\".env\").read())'" \
+              "bash <<< 'cat .env'" '$(echo cat) .env' '. .env; printenv' 'cat prod.env' 'find . -name .env -exec cat {} \;' 'set -a; . .env; export -p' 'source .env; declare -p'; do
+      j="$(_ej Bash "$(python3 -c 'import json,sys;print(json.dumps({"command":sys.argv[1]}))' "$c2")")"
+      [ "$(_eg "${j}")" = 2 ] || { bad2=1; record_fail "env-exposure: (h2) escape passou" "$(printf '%q' "${c2}")"; }
+    done
+    [ "$(_eg "$(_ej Grep '{"pattern":"T","glob":"*.env"}')")" = 2 ] || { bad2=1; record_fail "env-exposure: (h2) escape passou" "Grep glob *.env"; }
+    for c2 in $'# sem ler o .env\nbash .claude/utils/task-manager/env-check.sh --provider' 'echo ".env" >> .gitignore' \
+              'if ! grep -q "^\.env$" .gitignore; then echo x; fi' 'find . -name .env' 'wc -l .env' 'docker compose --env-file .env up' \
+              'cp .env .env.bak' 'echo l | tee -a .env' 'grep -rn foo --exclude .env' 'sha256sum .env'; do
+      j="$(_ej Bash "$(python3 -c 'import json,sys;print(json.dumps({"command":sys.argv[1]}))' "$c2")")"
+      [ "$(_eg "${j}")" = 0 ] || { bad2=1; record_fail "env-exposure: (h2) falso positivo" "$(printf '%q' "${c2}")"; }
+    done
+    [ "${bad2}" = 0 ] && record_pass "env-exposure: (h2) quebra de linha separa comandos; git diff/show, glob, interpretador e despejo são barrados; metadados e comentário passam"
+  fi
+  # (j) a VARREDURA que achou os falsos positivos: todo bloco bash do corpus que cita .env passa pelo veto com rc 0
+  if [ -f "${guard}" ]; then
+    local sweep
+    sweep="$(cd "${REPO_ROOT}" && python3 - "${guard}" <<'SWEEP'
+import json, re, subprocess, sys
+files = subprocess.run(['git', 'ls-files', '.claude/commands', '.claude/skills', '.claude/agents', '.claude/utils', 'plugins'],
+                       capture_output=True, text=True).stdout.split()
+n, bad = 0, []
+for f in files:
+    if not f.endswith('.md'):
+        continue
+    s = open(f, encoding='utf-8', errors='replace').read()
+    for m in re.finditer(r'```(?:bash|sh|shell)\n(.*?)```', s, re.S):
+        if not re.search(r'\.env\b', m.group(1)):
+            continue
+        n += 1
+        p = subprocess.run(['bash', sys.argv[1]], input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': m.group(1)}}),
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            bad.append('%s:%d' % (f, s[:m.start()].count('\n') + 1))
+print('%d %s' % (n, ' '.join(bad)))
+SWEEP
+)" || true
+    local sn="${sweep%% *}" sb="${sweep#* }"
+    [ "${sb}" = "${sweep}" ] && sb=""
+    if [ -n "${sn}" ] && [ "${sn}" -gt 0 ] 2>/dev/null && [ -z "${sb}" ]; then
+      record_pass "env-exposure: (j) os ${sn} blocos bash do corpus que citam .env passam pelo veto (nenhum lê, nenhum é barrado à toa)"
+    else record_fail "env-exposure: (j) varredura do corpus" "blocos=${sn:-?} barrados: ${sb:-(varredura não rodou)}"; fi
+  fi
+  # (k) HEREDOC: o corpo é DADO ou CÓDIGO conforme o CONSUMIDOR (2026-10-06). Medido ao abrir o PR #933:
+  #     o veto lia cada linha do corpo como comando, e uma linha de markdown começando com `**` (glob que
+  #     casa `.env`) barrou um `cat > corpo.md <<'EOF'`. E o inverso, um ESCAPE: o heredoc SEM aspas com
+  #     crase (`cat .env` entre crases) passava. Casos em arquivo de dados (python), porque o próprio veto
+  #     barraria um heredoc com estes corpos escrito inline aqui.
+  if [ -f "${guard}" ]; then
+    local hd_out
+    hd_out="$(python3 - "${guard}" <<'HDPY'
+import json, subprocess, sys
+Q = "'"
+def t(cmd):
+    p = subprocess.run(['bash', sys.argv[1]], input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': cmd}}),
+                       capture_output=True, text=True)
+    return p.returncode
+C = [(0, "cat > x.md <<" + Q + "E" + Q + "\n- **Fora (o gate):**\n**\nE\ngh pr create --body-file x.md"),
+     (0, "git commit -F - <<" + Q + "M" + Q + "\nfix: x\n\nx:**\nM"),
+     (2, "cat > x <<" + Q + "E" + Q + "\ncat .env\nE"),          # texto citando .env gravado em ARQUIVO: pode virar script
+     (0, "cat <<" + Q + "E" + Q + "\n$(cat .env)\nE"),           # entre aspas, para a saída padrão: inerte
+     (0, "gh pr create --body-file - <<" + Q + "E" + Q + "\n- **x:**\nE"),
+     (2, "cat > x <<E\n$(cat .env)\nE"),
+     (2, "cat > x <<E\nvalor: `cat .env`\nE"),
+     (2, "bash <<" + Q + "E" + Q + "\ncat .env\nE"),
+     (2, "sh -s <<E\ncat .env\nE"),
+     (2, "python3 - <<" + Q + "P" + Q + "\nprint(open('.env').read())\nP"),
+     (2, "node <<" + Q + "J" + Q + "\nrequire('fs').readFileSync('.env')\nJ"),
+     (2, "cat > x <<" + Q + "E" + Q + "\nnada\nE\ncat .env"),
+     (2, "cat <<-E\n\tdado\n\tE\ncat .env"),
+     (0, "python3 - <<" + Q + "P" + Q + "\nprint(1)\nP"),
+     # escapes que a 1ª cura abria (passada adversarial, 2026-10-06) — um por classe
+     (2, "cat <<" + Q + "E" + Q + " | bash\ncat .env\nE"),
+     (2, "sudo -u root bash <<" + Q + "E" + Q + "\ncat .env\nE"),
+     (2, "ssh host <<" + Q + "E" + Q + "\ncat .env\nE"),
+     (2, "eval $(cat <<" + Q + "E" + Q + "\ncat .env\nE\n)"),
+     (2, "cat <<" + Q + "A" + Q + " ; bash <<" + Q + "B" + Q + "\nx\nA\ncat .env\nB"),
+     (2, "cat <<END-X\nhello\nEND-X\ncat .env"),
+     (2, "echo " + Q + "a <<E" + Q + "\ncat .env"),
+     (2, "cat <<E\n$( (cat .env) )\nE"),
+     # escapes que a 2ª cura abria (análise linha a linha, sem o estado do shell anterior)
+     (2, ": <<" + Q + "X" + Q + "\ncat <<" + Q + "E" + Q + "\nX\ncat .env\nE"),
+     (2, "echo \"\ncat <<" + Q + "E" + Q + "\n\"\ncat .env\nE"),
+     (2, "xargs \\\ncat <<" + Q + "E" + Q + "\n.env\nE"),
+     (2, "cat <<-E\nx\nE\ncat .env\n-E"),
+     (2, "cat <<" + Q + "E" + Q + " > >(sh)\ncat .env\nE"),
+     (2, "git -c alias.x=" + Q + "!sh" + Q + " x <<" + Q + "E" + Q + "\ncat .env\nE"),
+     (2, "cat <<" + Q + "E" + Q + " > run; sh run\ncat .env\nE"),
+     (2, "cat <<" + Q + "E" + Q + " >&3\ncat .env\nE")]
+print(' '.join('%d:%d>%d' % (i, e, g) for i, (e, c) in enumerate(C) for g in [t(c)] if g != e))
+HDPY
+)" || hd_out="o harness do caso (k) não rodou"
+    if [ -z "${hd_out}" ]; then
+      record_pass "env-exposure: (k) heredoc: corpo de texto entre aspas passa (markdown com **), corpo para shell/interpretador e expansão sem aspas são barrados; os 15 escapes das duas curas anteriores seguem barrados (30 casos)"
+    else record_fail "env-exposure: (k) heredoc julgado pelo consumidor" "casos divergentes (índice:esperado>veio): ${hd_out}"; fi
+  fi
+  # (i) o veto está REGISTRADO no settings.json (guarda escrita e não ligada é guarda morta)
+  if python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if any("pretooluse-env-guard.sh" in h.get("command","") for g in d["hooks"]["PreToolUse"] for h in g.get("hooks",[])) else 1)' "${REPO_ROOT}/.claude/settings.json"; then
+    record_pass "env-exposure: (i) o veto está registrado no PreToolUse"
+  else record_fail "env-exposure: (i) registro" "pretooluse-env-guard.sh fora do settings.json"; fi
+  # (f) o exemplo não prende ninguém num provider que não escolheu
+  if grep -qE '^TASK_MANAGER_PROVIDER=none([[:space:]]|$)' "${REPO_ROOT}/.env.example"; then record_pass "env-exposure: (f) .env.example nasce com TASK_MANAGER_PROVIDER=none"
+  else record_fail "env-exposure: (f) .env.example" "o default não é none"; fi
+}
+
+run_pre_push_selftests() {
+  local hook="${REPO_ROOT}/.githooks/pre-push" pf="${REPO_ROOT}/ops/pr-finalize.sh"
+  if [ ! -f "${hook}" ] || [ ! -f "${pf}" ]; then record_fail "pre-push" "ausente: ${hook} / ${pf}"; return; fi
+  local d; d="$(mktemp -d)"
+  # limpeza mesmo se a família abortar no meio (worktree vazada medida pelo Elenxo)
+  trap 'git -C "${REPO_ROOT}" worktree list --porcelain | sed -n "s#^worktree ##p" | grep -F "'"${d}"'" | xargs -r -n1 git -C "${REPO_ROOT}" worktree remove --force >/dev/null 2>&1; rm -rf "'"${d}"'"' RETURN
+  printf '#!/usr/bin/env bash\necho "  Violações HARD : 0"; exit 0\n' > "${d}/ok.sh"
+  printf '#!/usr/bin/env bash\necho "VIOLATION: x: REGRA 81 (Painel)"; echo "  Violações HARD : 1"; exit 1\n' > "${d}/bad.sh"
+  printf '#!/usr/bin/env bash\necho "  Violações HARD : 2"; exit 0\n' > "${d}/liar.sh"
+  # lint que CONSOME o stdin e decide pela branch: prova que o laço do hook não entrega as refs ao lint
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nif [ "${GITHUB_HEAD_REF}" = good ]; then echo "  Violações HARD : 0"; exit 0; fi\necho "  Violações HARD : 1"; exit 1\n' > "${d}/eater.sh"
+  mkdir -p "${d}/ghfail" "${d}/ghpr"
+  printf '#!/usr/bin/env bash\necho "gh: not authenticated" >&2; exit 4\n' > "${d}/ghfail/gh"
+  printf '#!/usr/bin/env bash\necho 9\n' > "${d}/ghpr/gh"
+  chmod +x "${d}/ghfail/gh" "${d}/ghpr/gh"
+  local Z=0000000000000000000000000000000000000000 S; S="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  local OURL; OURL="$(git -C "${REPO_ROOT}" remote get-url --push origin 2>/dev/null || echo u)"
+  # o marcador do pr-finalize mora no git-common-dir, COMPARTILHADO por todas as worktrees: se ele já
+  # aponta para este HEAD (o motor acabou de rodar aqui), todo caso abaixo pularia o julgamento e
+  # passaria pelo motivo errado. Guardado e retirado antes; devolvido no fim dos casos de marcador.
+  local mk; mk="$(git -C "${REPO_ROOT}" rev-parse --git-common-dir)/onion-prefinalize-ok"
+  local had=""; [ -f "${mk}" ] && had="$(cat "${mk}")"; rm -f "${mk}"
+  _pp() {  # <env> <sha> [remote] [url] [ref] → rc do hook
+    local rc=0
+    printf '%s %s %s %s\n' "${5:-refs/heads/x}" "$2" "${5:-refs/heads/x}" "${Z}" | (cd "${REPO_ROOT}" && env ONION_PREPUSH_TEST=1 $1 bash "${hook}" "${3:-origin}" "${4:-u}" >/dev/null 2>&1) || rc=$?
+    printf '%s' "${rc}"
+  }
+  _ppc() {  # <nome> <esperado> <env> <sha> [remote] [url] [ref]
+    local got; got="$(_pp "$3" "$4" "${5:-origin}" "${6:-u}" "${7:-}")"
+    if [ "${got}" = "$2" ]; then record_pass "pre-push: $1 (rc=$2)"
+    else record_fail "pre-push: $1" "esperava rc=$2, veio rc=${got}"; fi
+  }
+  local W="ONION_PREPUSH_PR=9 ONION_PREPUSH_NO_WORKTREE=1"
+  _ppc "PR aberto + lint com HARD → RECUSA"                 1 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}"
+  _ppc "PR aberto + rc 0 mas HARD=2 → RECUSA (lê o número)"  1 "${W} ONION_PREPUSH_LINT=${d}/liar.sh" "${S}"
+  _ppc "PR aberto + 0 HARD → passa"                          0 "${W} ONION_PREPUSH_LINT=${d}/ok.sh" "${S}"
+  _ppc "sem PR aberto (WIP) com lint ruim → passa"           0 "ONION_PREPUSH_PR= ONION_PREPUSH_LINT=${d}/bad.sh" "${S}"
+  _ppc "deleção de ref → passa"                              0 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${Z}"
+  _ppc "tag com lint ruim → fora de escopo (passa)"          0 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}" origin u refs/tags/v9
+  _ppc "worktree do commit empurrado + 0 HARD → passa"       0 "ONION_PREPUSH_PR=9 ONION_PREPUSH_LINT=${d}/ok.sh" "${S}"
+  _ppc "sha que não monta worktree → RECUSA (não sei o que vai)" 1 "ONION_PREPUSH_PR=9 ONION_PREPUSH_LINT=${d}/ok.sh" "1111111111111111111111111111111111111111"
+  _ppc "outro remote (outra URL) → não julga"                0 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}" "upstream" "u"
+  # julgado pelo DESTINO (menor 7 do Elenxo 2): nome diferente, URL do origin → julga
+  _ppc "remote com OUTRO NOME e a URL do origin → RECUSA"    1 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}" "mirror" "${OURL}"
+  # gh FALHANDO (sem auth) não pode virar "sem PR" (B3); gh com PR + lint ruim recusa pelo caminho real do gh
+  _ppc "gh falhando (rc=4) → RECUSA, não 'sem PR'"           1 "PATH=${d}/ghfail:${PATH} ONION_PREPUSH_NO_WORKTREE=1 ONION_PREPUSH_LINT=${d}/ok.sh" "${S}"
+  _ppc "gh devolve PR + lint ruim → RECUSA"                  1 "PATH=${d}/ghpr:${PATH} ONION_PREPUSH_NO_WORKTREE=1 ONION_PREPUSH_LINT=${d}/bad.sh" "${S}"
+  # o laço não entrega o stdin ao lint (menor 9 do Elenxo 2): com o vazamento a 2ª ref nem era julgada
+  local rc=0
+  printf 'refs/heads/good %s refs/heads/good %s\nrefs/heads/bad %s refs/heads/bad %s\n' "${S}" "${Z}" "${S}" "${Z}" \
+    | (cd "${REPO_ROOT}" && env ONION_PREPUSH_TEST=1 ${W} ONION_PREPUSH_LINT="${d}/eater.sh" bash "${hook}" origin u >/dev/null 2>&1) || rc=$?
+  if [ "${rc}" = 1 ]; then record_pass "pre-push: lint que lê o stdin não engole a ref seguinte (rc=1)"
+  else record_fail "pre-push: stdin vazou para o lint" "a 2ª ref (com HARD) não foi julgada (rc=${rc})"; fi
+  # sem ONION_PREPUSH_TEST os pontos de teste NÃO valem: um ONION_PREPUSH_PR= vazio não desliga o hook
+  rc=0
+  printf 'refs/heads/x %s refs/heads/x %s\n' "${S}" "${Z}" | (cd "${REPO_ROOT}" && env PATH="${d}/ghfail:${PATH}" ONION_PREPUSH_PR= bash "${hook}" origin u >/dev/null 2>&1) || rc=$?
+  if [ "${rc}" = 1 ]; then record_pass "pre-push: ponto de teste sem ONION_PREPUSH_TEST é ignorado (rc=1)"
+  else record_fail "pre-push: ponto de teste vazou" "ONION_PREPUSH_PR= sem TEST desligou o hook (rc=${rc})"; fi
+  # marcador do pr-finalize: o MESMO commit não é relintado, NEM depende do gh; outro commit é relintado
+  printf '%s\n' "${S}" > "${mk}"
+  _ppc "marcador = este commit → não relinta (passa)"        0 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}"
+  _ppc "marcador = este commit + gh falhando → passa"        0 "PATH=${d}/ghfail:${PATH} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}"
+  printf '%s\n' "deadbeef" > "${mk}"
+  _ppc "marcador de OUTRO commit → relinta (recusa)"         1 "${W} ONION_PREPUSH_LINT=${d}/bad.sh" "${S}"
+  if [ -n "${had}" ]; then printf '%s\n' "${had}" > "${mk}"; else rm -f "${mk}"; fi
+  # pr-finalize: recusas que não dependem de lint
+  local o
+  rc=0; o="$(cd "${REPO_ROOT}" && git -c advice.detachedHead=false worktree add -q --detach "${d}/det" HEAD 2>&1 && cd "${d}/det" && bash "${pf}" 2>&1)" || rc=$?   # set -e da bancada
+  if [ "${rc}" = 1 ] && grep -q 'HEAD destacado' <<< "${o}"; then record_pass "pr-finalize: HEAD destacado → recusa"
+  else record_fail "pr-finalize: HEAD destacado" "rc=${rc}: ${o:0:160}"; fi
+  rc=0; o="$(cd "${REPO_ROOT}" && bash "${pf}" --rebase --bogus 2>&1)" || rc=$?
+  if [ "${rc}" = 1 ] && grep -q 'argumento desconhecido' <<< "${o}"; then record_pass "pr-finalize: argumento desconhecido → recusa"
+  else record_fail "pr-finalize: argumento desconhecido" "rc=${rc}"; fi
+
+  # ── sandbox git REAL. Os stubs LEEM A ÁRVORE em que rodam (o Elenxo 2 mediu que stubs de caminho absoluto
+  # deixavam sobreviver o mutante "lint na árvore em vez do commit"):
+  #   · lint: HARD 7 sem o env do CI; HARD 1 se lint-rules.md não acompanha a.txt (B2); senão o número em
+  #     `verdict` ('liar' = HARD 2 com rc 0);
+  #   · regen: reescreve lint-rules.md a partir de a.txt (a projeção GERADA que a 1ª forma deixava fora);
+  #   · guarda do resíduo: FIEL (mesmo diff, árvore-suja → índice, só o frontmatter, sem aspas, base
+  #     origin/main com fallback main).
+  _sbmk() {  # <dir> → repo em <dir>/w na branch feat/x, base em origin/main
+    local s="$1"
+    git init -q --bare -b main "${s}/remote.git" && git clone -q "${s}/remote.git" "${s}/w" 2>/dev/null || return 1
+    ( cd "${s}/w" && git config user.email t@t && git config user.name t \
+      && mkdir -p .claude/utils/adopt .claude/validation docs/onion docs/evolution/review \
+      && printf '%s\n' '#!/bin/bash' 'printf "v-%s\n" "$(cat a.txt 2>/dev/null)" > .claude/validation/lint-rules.md' > .claude/utils/adopt/regen-ssot-projections.sh \
+      && printf '#!/bin/bash\nexit 0\n' > .claude/validation/kg-backlog-project.sh \
+      && printf '#!/bin/bash\nprintf "a\\tb\\n"\n' > .claude/validation/kg-trace-resolve.sh \
+      && printf '%s\n' '#!/bin/bash' \
+           '[ "${GITHUB_EVENT_NAME:-}" = pull_request ] || { echo "  Violações HARD : 7"; exit 1; }' \
+           '[ "$(cat .claude/validation/lint-rules.md 2>/dev/null)" = "v-$(cat a.txt 2>/dev/null)" ] || { echo "VIOLATION: lint-rules defasado"; echo "  Violações HARD : 1"; exit 1; }' \
+           'v="$(cat verdict 2>/dev/null || echo 0)"' \
+           'if [ "$v" = liar ]; then echo "  Violações HARD : 2"; exit 0; fi' \
+           'echo "  Violações HARD : $v"; [ "$v" = 0 ]' > .claude/validation/lint-artifacts.sh \
+      && printf '%s\n' '#!/bin/bash' 'BR="${GITHUB_HEAD_REF:-$(git branch --show-current)}"; R="docs/evolution/review/$(printf "%s" "$BR" | tr / -).md"' \
+           'BASE="$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD)"' \
+           'if git diff --quiet HEAD; then S="$(git -c core.abbrev=40 -c diff.noprefix=false diff --no-ext-diff --no-color "$BASE" HEAD -- . ":(exclude)docs/evolution/review" | sha256sum | cut -c1-64)"' \
+           'else S="$(git -c core.abbrev=40 -c diff.noprefix=false diff --no-ext-diff --no-color --cached "$BASE" -- . ":(exclude)docs/evolution/review" | sha256sum | cut -c1-64)"; fi' \
+           'D="$(awk '"'"'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{exit} NR>1'"'"' "$R" 2>/dev/null | sed -n "s/^reviewed_diff_sha256:[[:space:]]*//p" | head -1 | tr -d "\"")"' \
+           '[ "$D" = "$S" ] && echo "  ✅ casa" || echo "  ✗ ARTEFATO-CADUCO atual $S"' > .claude/validation/review-artifact-check.sh \
+      && chmod +x .claude/utils/adopt/*.sh .claude/validation/*.sh \
+      && echo base > docs/backlog.md && echo v0 > a.txt && echo 0 > verdict && seq 1 60 > c.txt \
+      && printf 'v-v0\n' > .claude/validation/lint-rules.md \
+      && git add -A && git commit -qm base && git push -q origin main && git switch -q -c feat/x ) >/dev/null 2>&1
+  }
+  _pf() {  # <dir> [args...] → rc do motor no sandbox (stdout+stderr em <dir>/out)
+    local s="$1" r=0; shift
+    (cd "${s}/w" && ONION_FINALIZE_CHECKPOINT=1 bash "${pf}" "$@" > "${s}/out" 2>&1) || r=$?
+    printf '%s' "${r}"
+  }
+  _pfc() {  # <nome> <esperado> <got> <dir>
+    if [ "$3" = "$2" ]; then record_pass "pr-finalize: $1 (rc=$2)"
+    else record_fail "pr-finalize: $1" "esperava rc=$2, veio rc=$3: $(tail -1 "$4/out" 2>/dev/null)"; fi
+  }
+  local R=docs/evolution/review/feat-x.md sb g
+  _new() {  # <nome> → sandbox com o PR stageado e resíduo pendente
+    sb="${d}/$1"; _sbmk "${sb}" || { record_fail "pr-finalize: sandbox $1" "não montou"; return 1; }
+    ( cd "${sb}/w" && echo v1 > a.txt && sed -i 50s/.*/PR/ c.txt && printf -- '---\nreviewed_diff_sha256: pendente\nverdict: APROVADO\n---\n' > "${R}" && git add -A ) >/dev/null 2>&1
+  }
+  # B1 — o motor NÃO LAVA resíduo
+  if _new b1; then
+    g="$(_pf "${sb}" -m t1)"; _pfc "resíduo novo (pendente) → carimba" 0 "${g}" "${sb}"
+    if grep -q 'No such file\|line [0-9]*:' "${sb}/out"; then record_fail "pr-finalize: stderr do carimbo" "$(grep -m1 'No such file\|line [0-9]*:' "${sb}/out")"
+    else record_pass "pr-finalize: caminho de carimbo sem erro de shell no stderr"; fi
+    ( cd "${sb}/w" && echo v2 > a.txt && git add a.txt ) >/dev/null 2>&1
+    g="$(_pf "${sb}" -m t2)"; _pfc "CÓDIGO mudou depois da revisão → RECUSA" 1 "${g}" "${sb}"
+    ( cd "${sb}/w" && git reset -q a.txt && git checkout -q a.txt && echo mudou >> docs/backlog.md && git add docs/backlog.md ) >/dev/null 2>&1
+    g="$(_pf "${sb}" -m t3)"; _pfc "só projeção mudou → recarimba" 0 "${g}" "${sb}"
+  fi
+  # B1 reaberto pelo Elenxo 2: hash entre aspas / com espaço no fim NÃO é "pendente"
+  local form
+  # 'semcodigo' é REDUNDANTE por construção desde o Elenxo 2 (o hash de código é validado em 64 hex, logo
+  # rcode vazio cai na recusa seguinte) — o caso fica pelo DESFECHO; 'lixo' é o que morde o mutante
+  # "não-hex = pendente" (aspas e espaço o _field já normaliza para o hash canônico).
+  for form in aspas espaco semcodigo lixo; do
+    _new "b1-${form}" || continue
+    g="$(_pf "${sb}" -m t1)"
+    ( cd "${sb}/w" && case "${form}" in
+        aspas) sed -i 's/^reviewed_diff_sha256: \(.*\)/reviewed_diff_sha256: "\1"/' "${R}" ;;
+        espaco) sed -i 's/^reviewed_diff_sha256: \(.*\)/reviewed_diff_sha256: \1 /' "${R}" ;;
+        semcodigo) sed -i '/^reviewed_code_sha256:/d' "${R}" ;;
+        lixo) sed -i 's/^reviewed_diff_sha256: .*/reviewed_diff_sha256: revisado-por-mim/' "${R}" ;;
+      esac && echo NAO-REVISADO > a.txt && git add -A ) >/dev/null 2>&1
+    g="$(_pf "${sb}" -m t2)"; _pfc "resíduo carimbado (${form}) + código mudou → RECUSA" 1 "${g}" "${sb}"
+  done
+  # o veredito é do COMMIT, não da árvore (B2): commit com HARD, árvore limpa por cima
+  if _new arvore; then
+    ( cd "${sb}/w" && echo 1 > verdict && git add verdict && echo 0 > verdict ) >/dev/null 2>&1
+    g="$(_pf "${sb}" -m t1)"; _pfc "commit com HARD e árvore limpa → RECUSA (julga o commit)" 1 "${g}" "${sb}"
+  fi
+  # o número de HARD é LIDO: rc 0 com 'HARD : 2' não passa
+  if _new liar; then
+    ( cd "${sb}/w" && echo liar > verdict && git add verdict ) >/dev/null 2>&1
+    g="$(_pf "${sb}" -m t1)"; _pfc "lint rc 0 com 'HARD : 2' → RECUSA" 1 "${g}" "${sb}"
+  fi
+  # rebase LIMPO não é "o código mudou" (maior 4 do Elenxo 2): a main mexe noutra linha do mesmo arquivo
+  if _new rebase; then
+    g="$(_pf "${sb}" -m t1)"
+    git clone -q "${sb}/remote.git" "${sb}/o" 2>/dev/null
+    ( cd "${sb}/o" && git config user.email o@o && git config user.name o && sed -i 2s/.*/MAIN/ c.txt && git commit -qam main2 && git push -q origin main ) >/dev/null 2>&1
+    g="$(_pf "${sb}" --rebase)"; _pfc "rebase limpo sobre main que mexe noutra linha → passa" 0 "${g}" "${sb}"
+  fi
+  # o hook julga o COMMIT EMPURRADO, não a árvore: commit com HARD, árvore limpa por cima
+  if _new hookwt; then
+    ( cd "${sb}/w" && printf 'v-v1\n' > .claude/validation/lint-rules.md && echo 1 > verdict && git add -A && git commit -qm bad && echo 0 > verdict ) >/dev/null 2>&1
+    rc=0
+    printf 'refs/heads/feat/x %s refs/heads/feat/x %s\n' "$(git -C "${sb}/w" rev-parse HEAD)" "${Z}" \
+      | (cd "${sb}/w" && env ONION_PREPUSH_TEST=1 ONION_PREPUSH_PR=9 ONION_PREPUSH_LINT=.claude/validation/lint-artifacts.sh bash "${hook}" origin u >/dev/null 2>&1) || rc=$?
+    if [ "${rc}" = 1 ]; then record_pass "pre-push: commit com HARD e árvore limpa → RECUSA (julga o commit)"
+    else record_fail "pre-push: julgou a árvore" "rc=${rc}"; fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Modo resolve-target — exercita .claude/utils/co-evolution/resolve-target.sh (F1.2: targeting fino
 # por seletor no alvo:, reusando graph.sh --triples). Asserções ESTRUTURAIS (não fixam nomes de membro
 # → robusto a mudança de roster). Pula o que depende de membros sem python+yaml.
@@ -6755,6 +7276,50 @@ run_prettierignore_selftests() {
 # (escopa um ignore CEGO de .claude/ p/ que a superfície do framework + stamp sejam
 # TRACKEÁVEIS no adotante; sinal de campo de adotante 2026-07-24). Self-contained.
 # ---------------------------------------------------------------------------
+# ── .gitignore de SEGREDOS no adotante (2026-10-06): as adoções do onion-curation e do onion-kg-ssot mediram
+#    que o /meta:adopt não gerava o bloco, e nada impedia commitar um .env. E o CI do adotante não disparava
+#    em .githooks/** (achado na mesma adoção).
+run_secret_gitignore_selftests() {
+  local helper="${REPO_ROOT}/.claude/utils/adopt/ensure-secret-gitignore.sh"
+  if [ ! -f "${helper}" ]; then record_fail "secret-gitignore" "helper ausente: ${helper}"; return; fi
+  local d before after out
+  # (a) sem .gitignore → cria com o bloco
+  d="$(mktemp -d)"; bash "${helper}" "${d}" >/dev/null 2>&1
+  if grep -qxF '.env' "${d}/.gitignore" && grep -qxF '!.env.example' "${d}/.gitignore"; then
+    record_pass "secret-gitignore: (a) sem .gitignore → cria com .env e a exceção do .env.example"
+  else record_fail "secret-gitignore: (a)" "o bloco não nasceu"; fi
+  rm -rf "${d}"
+  # (b) .gitignore do adotante preservado + bloco acrescentado; (c) 2ª rodada é no-op
+  d="$(mktemp -d)"; printf 'node_modules/\ndist/' > "${d}/.gitignore"
+  bash "${helper}" "${d}" >/dev/null 2>&1; before="$(cat "${d}/.gitignore")"
+  bash "${helper}" "${d}" >/dev/null 2>&1; after="$(cat "${d}/.gitignore")"
+  if grep -qxF 'node_modules/' "${d}/.gitignore" && grep -qxF 'dist/' "${d}/.gitignore" && grep -qxF '.env' "${d}/.gitignore" && [ "${before}" = "${after}" ]; then
+    record_pass "secret-gitignore: (b) preserva o do adotante (até sem \\n final) e (c) a 2ª rodada é no-op"
+  else record_fail "secret-gitignore: (b/c)" "perdeu linha do adotante, colou na última, ou não é idempotente"; fi
+  rm -rf "${d}"
+  # (d) regra do adotante que já cobre .env → nada muda
+  d="$(mktemp -d)"; printf '*.env\n' > "${d}/.gitignore"; before="$(cat "${d}/.gitignore")"
+  bash "${helper}" "${d}" >/dev/null 2>&1
+  if [ "$(cat "${d}/.gitignore")" = "${before}" ]; then record_pass "secret-gitignore: (d) regra própria do adotante respeitada"
+  else record_fail "secret-gitignore: (d)" "acrescentou bloco sobre uma regra que já cobria .env"; fi
+  rm -rf "${d}"
+  # (e) .env JÁ versionado → avisa em voz alta (não destrackeia)
+  d="$(mktemp -d)"; git -C "${d}" init -q; printf 'X=1\n' > "${d}/.env"; git -C "${d}" add .env
+  out="$(bash "${helper}" "${d}" 2>&1)"
+  if grep -q 'JÁ VERSIONADO' <<< "${out}"; then record_pass "secret-gitignore: (e) .env já versionado → aviso explícito"
+  else record_fail "secret-gitignore: (e)" "o .env versionado passou calado"; fi
+  rm -rf "${d}"
+  # (f) o adopt CHAMA o helper (registro: helper que ninguém chama é guarda morta)
+  if grep -q 'ensure-secret-gitignore.sh' "${REPO_ROOT}/.claude/commands/meta/adopt.md"; then
+    record_pass "secret-gitignore: (f) o /meta:adopt chama o helper no passo (0b)"
+  else record_fail "secret-gitignore: (f)" "o adopt não chama o helper"; fi
+  # (g) o CI do adotante dispara em .githooks/**
+  if grep -qF -- "- '.githooks/**'" "${REPO_ROOT}/.claude/utils/adopt/ci-workflow-onion.tpl"; then
+    record_pass "secret-gitignore: (g) o template de CI dispara em .githooks/**"
+  else record_fail "secret-gitignore: (g)" "o CI do adotante não dispara em .githooks/**"; fi
+}
+_family run_secret_gitignore_selftests
+
 run_scope_gitignore_selftests() {
   local helper="${REPO_ROOT}/.claude/utils/adopt/scope-claude-gitignore.sh"
   if [ ! -f "${helper}" ]; then record_fail "scope-gitignore" "helper ausente: ${helper}"; return; fi
@@ -7764,9 +8329,15 @@ run_empty_result_guard_selftests() {
   # (j) prova que dispara nos dois verbos que importam; (k) prova que NAO virou ruido nos verbos
   # vizinhos de LEITURA (`view`/`checks`/`list`), que sao justamente o que a guarda esta mandando ler.
   # Sem (k), a guarda ensinaria a ignorar a si mesma no momento exato em que quer ser obedecida.
+  # Projeto HERMÉTICO para o create: desde 2026-10-07 o aviso confere o resíduo commitado na branch,
+  # e rodar no checkout vivo faria (j) depender de a branch corrente ter resíduo.
+  local _pj; _pj="$(mktemp -d)"; git -C "${_pj}" init -q
+  git -C "${_pj}" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i
+  git -C "${_pj}" checkout -q -b feat/x; mkdir -p "${_pj}/.claude/validation"; : > "${_pj}/.claude/validation/lint-artifacts.sh"
+  mkdir -p "${_pj}/.github/workflows"; : > "${_pj}/.github/workflows/onion-review.yml"   # (j) cita a FONTE do revisor
   local mg_ok=1 v
-  for v in '"gh pr merge 551 --squash --delete-branch"' '"gh pr create --base main --head x"'; do
-    out="$(_erg "${v}" '"ok"' || true)"
+  for v in '"gh pr merge 551 --squash --delete-branch"' '"gh pr create --base main --head feat/x"'; do
+    out="$(CLAUDE_PROJECT_DIR="${_pj}" _erg "${v}" '"ok"' || true)"
     grep -qE 'MERGE-SEM-FONTE-LIDA|PR-SEM-PASSADA-ADVERSARIAL' <<< "${out}"|| mg_ok=0
   done
   if [ "${mg_ok}" -eq 1 ]; then
@@ -7786,6 +8357,29 @@ run_empty_result_guard_selftests() {
   if [ "${mg_noisy}" -eq 0 ]; then
     record_pass "empty-result-guard: (k) MENÇÃO ao comando (grep/echo) e verbos de leitura → SILENCIOSO"
   else record_fail "empty-result-guard: (k) anti-ruido do 5o" "disparou em verbo de LEITURA — ensinaria a ignorar o proprio aviso"; fi
+
+  # (s)(t)(u) — o aviso do CREATE olha o ARTEFATO e o PAPEL (sinal do onion-kg-ssot, 2026-10-07: o
+  # PR #3 de lá tinha o resíduo commitado e o aviso disparou igual; e no adotante ele prometia "o gate
+  # vai acusar" onde a REGRA 56 sai fora de escopo). (s) é o par anti-ruído; (t) o par honesto do
+  # papel; (u) prova que o `cd` de um PR aberto de worktree é seguido. MUTANTE: tirar o
+  # `_residuo_commitado` reprova (s) e (u); tirar o `_repo_derivado` reprova (t).
+  local _ok; _ok="$(mktemp -d)"; cp -r "${_pj}/." "${_ok}/"
+  mkdir -p "${_ok}/docs/evolution/review"; echo r > "${_ok}/docs/evolution/review/feat-x.md"
+  git -C "${_ok}" add -A; git -C "${_ok}" -c user.name=t -c user.email=t@t commit -qm r
+  out="$(CLAUDE_PROJECT_DIR="${_ok}" _erg '"gh pr create --fill"' '"ok"' || true)"
+  if ! grep -q 'PR-SEM-PASSADA' <<< "${out}"; then
+    record_pass "empty-result-guard: (s) create com resíduo COMMITADO na branch → SILENCIOSO (quem seguiu o ritual não é avisado)"
+  else record_fail "empty-result-guard: (s)" "avisou quem já tinha o resíduo — fadiga: ${out}"; fi
+  local _ad; _ad="$(mktemp -d)"; cp -r "${_pj}/." "${_ad}/"; printf 'role: adopted\n' > "${_ad}/.claude/.onion-version"
+  out="$(CLAUDE_PROJECT_DIR="${_ad}" _erg '"gh pr create --fill"' '"ok"' || true)"
+  if grep -q 'FORA DE ESCOPO' <<< "${out}" && ! grep -q 'vai acusar' <<< "${out}"; then
+    record_pass "empty-result-guard: (t) create no ADOTANTE sem resíduo → avisa SEM prometer gate que a REGRA 56 não aplica ali"
+  else record_fail "empty-result-guard: (t)" "o aviso do adotante promete cobrança inexistente: ${out}"; fi
+  out="$(CLAUDE_PROJECT_DIR="${_pj}" _erg "\"cd ${_ok} && gh pr create --fill\"" '"ok"' || true)"
+  if ! grep -q 'PR-SEM-PASSADA' <<< "${out}"; then
+    record_pass "empty-result-guard: (u) create de outro checkout (\`cd <worktree> &&\`) olha o resíduo DALI"
+  else record_fail "empty-result-guard: (u)" "olhou o projeto em vez do worktree do cd: ${out}"; fi
+  rm -rf "${_pj}" "${_ok}" "${_ad}"
 
   # (e) exit 2 quando dispara — é a ÚNICA via medida em que o stderr de PostToolUse chega ao modelo.
   #     Com exit 0 a guarda roda e o aviso EVAPORA (dogfood 2026-08-02). Esta asserção é load-bearing.
@@ -8527,23 +9121,43 @@ run_cited_directive_selftests() {
   # (f) PARIDADE COM O BINARIO, nos DOIS lados: cada trecho literal tem de estar no binario INSTALADO
   #     (deriva do Claude Code) E na guarda (deriva da copia). A 1a redacao so olhava o binario, e
   #     mutar a copia — tirar a mascara, tirar o lookbehind — passava verde. Sem binario: nao verificado.
-  local _bin _needle _miss=""; _bin="$(readlink -f "$(command -v claude 2>/dev/null)" 2>/dev/null || true)"
-  local -a _needles=('function pTe(e){return e.replace(/`[^`\n]+`/g,(n,r)=>{let s=e[r-1];return s==="!"||s==="`"?n:"`"+'
-    'cDn=/```!\s*\n?([\s\S]*?)\n?```/g,uDn=/(?<=^|\s)!`([^`]+)`/gm'
-    'let n=e.matchAll(cDn),r=e.includes("!`")?pTe(e).matchAll(uDn):[],s=[];for(let g of[...n,...r]){let h=g[1]?.trim();if(h)s.push({raw:g[0],command:h,at:g.index})}return s')
-  for _needle in "${_needles[@]}"; do
-    LC_ALL=C grep -aqF -- "${_needle}" "${chk}" || _miss="${_miss} guarda:${_needle:0:24}"
-  done
+  #     ESTRUTURAL, NÃO LITERAL (2026-10-06): os nomes minificados (`pTe`→`PCe`→`ECe`) mudam a cada build do
+  #     Claude Code — duas atualizações em dois dias pintaram de vermelho PRs sem relação com a guarda, e a
+  #     re-extração era à mão. Agora os identificadores entram como curinga (`⟨F⟩`, consistente dentro do
+  #     trecho) e só a ESTRUTURA é comparada: renomear não é deriva; mudar o comportamento é.
+  local _bin _miss; _bin="$(readlink -f "$(command -v claude 2>/dev/null)" 2>/dev/null || true)"
+  _cd_struct() {  # <arquivo> → imprime os trechos AUSENTES (vazio = os 3 presentes)
+    python3 - "$1" <<'CDPY'
+import re, sys
+data = open(sys.argv[1], 'rb').read().decode('latin-1')
+T = [r'function ⟨F⟩(e){return e.replace(/`[^`\n]+`/g,(n,r)=>{let s=e[r-1];return s==="!"||s==="`"?n:"`"+',
+     r'⟨B⟩=/```!\s*\n?([\s\S]*?)\n?```/g,⟨I⟩=/(?<=^|\s)!`([^`]+)`/gm',
+     r'let n=e.matchAll(⟨B⟩),r=e.includes("!`")?⟨F⟩(e).matchAll(⟨I⟩):[],s=[];for(let g of[...n,...r]){let h=⟨T⟩(g[1]??"");if(h)s.push({raw:g[0],command:h,at:g.index})}return s']
+for t in T:
+    rx, seen = '', set()
+    for part in re.split(r'(⟨[A-Z]⟩)', t):
+        m = re.fullmatch(r'⟨([A-Z])⟩', part)
+        if m:
+            k = m.group(1)
+            rx += ('(?P=%s)' % k) if k in seen else ('(?P<%s>[A-Za-z0-9_$]{1,6})' % k)
+            seen.add(k)
+        else:
+            rx += re.escape(part)
+    if not re.search(rx, data):
+        print(t[:28])
+CDPY
+  }
+  _miss="$(_cd_struct "${chk}" | sed 's/^/ guarda:/' | tr '\n' ' ')"
   # ⚠️ SEM BINARIO NAO E SKIP: o CI nao tem Claude Code instalado e roda em STRICT (skip = FALHA) —
   #    a 1a redacao pintou o #914 de vermelho por isso. O lado da COPIA e medido sempre; o lado do
   #    BINARIO so onde ele existe, e o rotulo DIZ que ali nao foi medido (a REGRA 65 cobra a versao).
   if [ -z "${_bin}" ] || [ ! -f "${_bin}" ]; then
-    if [ -z "${_miss}" ]; then record_pass "cited-directive: (f) a COPIA contem os 3 trechos literais (binario ausente neste host: a deriva do Claude Code NAO foi medida aqui)"
+    if [ -z "${_miss}" ]; then record_pass "cited-directive: (f) a COPIA contem a estrutura dos 3 trechos (binario ausente neste host: a deriva do Claude Code NAO foi medida aqui)"
     else record_fail "cited-directive: (f) copia mutada" "${_miss}"; fi
   else
-    for _needle in "${_needles[@]}"; do LC_ALL=C grep -aqF -- "${_needle}" "${_bin}" || _miss="${_miss} binario:${_needle:0:24}"; done
-    if [ -z "${_miss}" ]; then record_pass "cited-directive: (f) os 3 trechos literais estao no binario instalado E na guarda (sem deriva)"
-    else record_fail "cited-directive: (f) DERIVA" "ausente em:${_miss} — re-extraia o motor do binario ${_bin##*/} (TETO do cited-directive-check.sh)"; fi
+    _miss="${_miss}$(_cd_struct "${_bin}" | sed 's/^/ binario:/' | tr '\n' ' ')"
+    if [ -z "${_miss}" ]; then record_pass "cited-directive: (f) a estrutura dos 3 trechos esta no binario instalado E na guarda (renomear nao e deriva)"
+    else record_fail "cited-directive: (f) DERIVA" "ausente em:${_miss} — o COMPORTAMENTO do motor mudou no binario ${_bin##*/}: re-extraia (TETO do cited-directive-check.sh)"; fi
   fi
 }
 
@@ -10984,12 +11598,34 @@ run_seed_adoption_graph_selftests() {
 
   # (a) alvo virgem → semeia, E o RADAR aprova o grafo gerado (exit 0, sem contradição estrutural).
   d="$(_seed_fixture)"
-  bash "${helper}" "${d}" --gate-proven >/dev/null 2>&1 || true
+  local _seed_err
+  _seed_err="$(bash "${helper}" "${d}" --gate-proven 2>&1 >/dev/null || true)"
+  # (a0) o semeador não executa nada do próprio corpo (2026-10-06): uma crase num comentário dentro do
+  #      heredoc SEM aspas virou `---: command not found` na adoção do onion-kg-ssot, com o comentário cortado.
+  if grep -q 'command not found' <<< "${_seed_err}"; then
+    record_fail "seed-graph: (a0) o semeador executou texto do próprio corpo" "$(grep 'command not found' <<< "${_seed_err}" | head -1)"
+  else record_pass "seed-graph: (a0) o semeador roda sem executar texto do corpo (stderr sem 'command not found')"; fi
   rc=0
   ( cd "${d}" && bash .claude/validation/kg-radar.sh docs/onion/graph/onion-adoption.kg.yaml >/dev/null 2>&1 ) || rc=$?
   if [ -f "${d}/docs/onion/graph/onion-adoption.kg.yaml" ] && [ "${rc}" -eq 0 ]; then
     record_pass "seed-graph: (a) semeia e o RADAR aprova o próprio artefato gerado"
   else record_fail "seed-graph: (a)" "não semeou, ou o radar reprovou o grafo gerado (rc=${rc})"; fi
+  # (a2) DOCUMENTO ÚNICO, e o /meta:drive o LÊ (sinal de campo onion-slm, 2026-10-06): a semente abria e
+  #      fechava o cabeçalho com `---`; o radar aceitava e o kg-drive-project.sh recusava com exit 2 — o 1º
+  #      grafo de todo adotante nascia fora do /meta:drive. A asserção é a do CONSUMIDOR que recusava.
+  local _seps _drc=0
+  _seps="$(grep -c '^---' "${d}/docs/onion/graph/onion-adoption.kg.yaml" 2>/dev/null || true)"
+  ( cd "${d}" && bash "${REPO_ROOT}/.claude/validation/kg-drive-project.sh" docs/onion/graph/onion-adoption.kg.yaml >/dev/null 2>&1 ) || _drc=$?
+  if [ "${_seps:-1}" = 0 ] && [ "${_drc}" = 0 ]; then
+    record_pass "seed-graph: (a2) a semente sai em documento único e o /meta:drive a lê (exit 0)"
+  else record_fail "seed-graph: (a2) semente multi-documento" "separadores=${_seps} drive rc=${_drc}"; fi
+  # (a3) o radar AVISA .kg.yaml multi-documento (SOFT — não reprova; nomeia quem recusa)
+  printf -- '---\ngraph: x\n---\nmeta:\n  id: x\n  schema_version: "1"\nnodes:\n  - id: A\n    node_type: claim\n    status: open\n    plane: DEV\n    impact: 1\n    confidence: 0.5\n    label: a\n' > "${d}/multi.kg.yaml"
+  local _mout _mrc=0
+  _mout="$(bash "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${d}/multi.kg.yaml" --schema 2>&1)" || _mrc=$?
+  if grep -q 'multi-documento' <<< "${_mout}" && [ "${_mrc}" = 0 ]; then
+    record_pass "seed-graph: (a3) o radar avisa .kg.yaml multi-documento, sem reprovar"
+  else record_fail "seed-graph: (a3) aviso multi-documento" "rc=${_mrc}, aviso ausente"; fi
   rm -rf "${d}"
 
   # (b) NEVER-CLOBBER pela pergunta certa — "o alvo TEM grafo?", não "este arquivo existe?": semear
@@ -11033,6 +11669,15 @@ run_seed_adoption_graph_selftests() {
   rm -rf "${d}"
 
   unset -f _seed_fixture
+  # (r1) o radar AVISA `decision` `done` em plane: DEV (MU-18, sinal onion-slm 2026-10-06) e CALA em PROD
+  local _dd; _dd="$(mktemp -d)"
+  printf 'meta:\n  id: dd\n  schema_version: "1"\nnodes:\n  - id: D1\n    node_type: decision\n    status: done\n    plane: DEV\n    impact: 2\n    confidence: 0.8\n    label: decisao em dev\n  - id: D2\n    node_type: decision\n    status: done\n    plane: PROD\n    impact: 2\n    confidence: 0.8\n    label: decisao em prod\n    verified_at: 2026-10-06\n    verified_against: x\nedges:\n  - from: D1\n    to: D2\n    edge_type: DEPENDS_ON\n' > "${_dd}/dd.kg.yaml"
+  local _ddo _ddrc=0
+  _ddo="$(bash "${REPO_ROOT}/.claude/validation/kg-radar.sh" "${_dd}/dd.kg.yaml" --reconcile 2>&1)" || _ddrc=$?
+  if grep -q 'decision-done-em-DEV: 1 decisão(ões)' <<< "${_ddo}" && grep -q '(D1)' <<< "${_ddo}" && ! grep -q 'D2)' <<< "${_ddo}" && [ "${_ddrc}" = 0 ]; then
+    record_pass "seed-graph: (r1) o radar avisa decision done em DEV (só D1, agregado) sem reprovar"
+  else record_fail "seed-graph: (r1) aviso decision-done-em-DEV" "rc=${_ddrc} saída: $(grep 'decision-done' <<< "${_ddo}" | head -1)"; fi
+  rm -rf "${_dd}"
 }
 
 run_githook_selftests() {
@@ -11912,7 +12557,12 @@ run_scaffold_diagnose_selftests() {
 # ---------------------------------------------------------------------------
 run_plugins_sync_selftests() {
   local asm="${REPO_ROOT}/.claude/utils/marketplace/assemble-plugin.sh"
-  local vdir="${REPO_ROOT}/.claude/utils/marketplace/verticals"
+  # A BARRA FINAL é de propósito (2026-10-06): o `_selftest_family_map` só trata como PREFIXO o caminho
+  # que termina em `/`. Esta família regenera CADA manifesto e compara com o plugin commitado — é a
+  # cobertura real de uma mudança de manifesto. Sem a barra, `onion-engineering`/`onion-product` não eram
+  # reivindicados por ninguém e o pre-commit caía no failsafe "tudo": 217 famílias, 27 min medidos no
+  # PR #932. O `//` resultante em "${vdir}/x" é inócuo (medido pela passada adversarial).
+  local vdir="${REPO_ROOT}/.claude/utils/marketplace/verticals/"
   if [ ! -f "${asm}" ] || [ ! -d "${vdir}" ]; then record_fail "plugins-sync" "assembler/verticals ausentes"; return; fi
   if ! command -v jq >/dev/null 2>&1; then record_skip "plugins-sync: jq ausente → pulado (gracioso)"; return; fi
   # Drift-guard de plugins committed é core-only: o adotante não vendoriza plugins/
@@ -12575,13 +13225,39 @@ run_corelay_selftests() {
   else record_fail "co-relay: invariante I3" "esperava untracked (??) e 0 commits; status='${st}' commits=${commits}"; fi
   rm -rf "${d}" "${core}"
 
-  # (h) never-clobber: sinal já presente no inbox do core → no-op exit 0
+  # (h) never-clobber do que o core JÁ COMMITOU: mesmo nome, conteúdo diferente, TRACKED → no-op
+  #     (desde 2026-10-07 a colisão decide por conteúdo; o que nunca se sobrescreve é a árvore do core)
   d="$(mktemp -d)"; core="$(mktemp -d)"; git -C "${core}" init -q; mkdir -p "${core}/docs/evolution/inbox"
   mk_adopter "${d}" adopted
   printf '# já existe (versão do core)\n' > "${core}/${SIG}"
+  git -C "${core}" add -A >/dev/null 2>&1
+  git -C "${core}" -c user.name=t -c user.email=t@t commit -qm triado >/dev/null 2>&1
+  local out_h; rc=0; out_h="$( ( cd "${d}" && bash "${helper}" --target "${core}" ) 2>&1)" || rc=$?
+  if [ "${rc}" -eq 0 ] && grep -q 'versão do core' "${core}/${SIG}" && grep -q 'JÁ COMMITOU' <<< "${out_h}"; then
+    record_pass "co-relay: never-clobber do tracked (no-op que DIZ como entregar a atualização)"
+  else record_fail "co-relay: never-clobber" "exit ${rc} — clobberou o tracked ou calou: ${out_h}"; fi
+  rm -rf "${d}" "${core}"
+
+  # (h2) sinal ATUALIZADO sobre a entrega anterior ainda UNTRACKED → entrega por cima (sinal do
+  #      onion-kg-ssot, 2026-10-07: a checagem de existência saía "já relayado" antes do dedup e a
+  #      versão nova nunca chegava). MUTANTE: voltar ao `[ -e ] → no-op` reprova este caso.
+  d="$(mktemp -d)"; core="$(mktemp -d)"; git -C "${core}" init -q; mkdir -p "${core}/docs/evolution/inbox"
+  mk_adopter "${d}" adopted
+  printf '# entrega anterior, ainda nao triada\n' > "${core}/${SIG}"
   rc=0; ( cd "${d}" && bash "${helper}" --target "${core}" ) >/dev/null 2>&1 || rc=$?
-  if [ "${rc}" -eq 0 ] && grep -q 'versão do core' "${core}/${SIG}"; then record_pass "co-relay: never-clobber (no-op idempotente)"
-  else record_fail "co-relay: never-clobber" "exit ${rc} — clobberou o arquivo já presente?"; fi
+  if [ "${rc}" -eq 0 ] && grep -q 'sinal de teste' "${core}/${SIG}"; then
+    record_pass "co-relay: mesmo nome, destino untracked, conteúdo novo → ATUALIZA (o carteiro não cala a versão nova)"
+  else record_fail "co-relay: atualização untracked" "exit ${rc} — a versão nova não chegou: $(head -1 "${core}/${SIG}")"; fi
+  rm -rf "${d}" "${core}"
+
+  # (h3) mesmo nome, conteúdo IDÊNTICO → no-op (a cura não virou re-entrega a cada rodada)
+  d="$(mktemp -d)"; core="$(mktemp -d)"; git -C "${core}" init -q; mkdir -p "${core}/docs/evolution/inbox"
+  mk_adopter "${d}" adopted
+  cp "${d}/${SIG}" "${core}/${SIG}"
+  local out_h3; rc=0; out_h3="$( ( cd "${d}" && bash "${helper}" --target "${core}" ) 2>&1)" || rc=$?
+  if [ "${rc}" -eq 0 ] && grep -q '0 relayado' <<< "${out_h3}"; then
+    record_pass "co-relay: mesmo nome e conteúdo idêntico → no-op"
+  else record_fail "co-relay: idêntico" "exit ${rc} — re-entregou o idêntico: ${out_h3}"; fi
   rm -rf "${d}" "${core}"
 
   # (i) --dry-run não escreve nada
@@ -14575,12 +15251,48 @@ run_guardrails_selftests() {
 # ---------------------------------------------------------------------------
 if [ "${SELFTEST_LIST}${SELFTEST_CHILD}" = "00" ]; then echo "=== Onion Lint Selftest — auto-teste das guardas ==="; echo ""; fi
 
+# ── QUAIS são as HARD (2026-10-07): o lint grava em ONION_LINT_HARD_FILE só as violações HARD, sem mudar
+#    o formato da linha. O motor (pr-finalize) usa isso para nomear o que reprovou.
+run_lint_hard_file_selftests() {
+  local fx="${REPO_ROOT}/.claude/validation/fixtures/r12-tool-names/bad-provider-mcp.md"
+  local good="${REPO_ROOT}/.claude/validation/fixtures/r12-tool-names/good-native.md"
+  if [ ! -f "${fx}" ] || [ ! -f "${good}" ] || [ -z "${SANDBOX:-}" ]; then
+    record_skip "lint-hard-file: fixture ou sandbox ausente → pulado"; return; fi
+  local dir="${SANDBOX}/.claude/agents/development" hf; hf="$(mktemp)"
+  mkdir -p "${dir}"; cp "${fx}" "${dir}/zz-hard-file-probe.md"
+  ONION_LINT_HARD_FILE="${hf}" bash "${SANDBOX}/.claude/validation/lint-artifacts.sh" --only="${dir}/zz-hard-file-probe.md" >/dev/null 2>&1 || true
+  if grep -q '^VIOLATION: .*zz-hard-file-probe.md' "${hf}"; then
+    record_pass "lint-hard-file: (a) a violação HARD da fixture vai para ONION_LINT_HARD_FILE, nomeada"
+  else record_fail "lint-hard-file: (a)" "a HARD não chegou ao arquivo ($(wc -l < "${hf}") linha[s])"; fi
+  : > "${hf}"; cp "${good}" "${dir}/zz-hard-file-probe.md"
+  ONION_LINT_HARD_FILE="${hf}" bash "${SANDBOX}/.claude/validation/lint-artifacts.sh" --only="${dir}/zz-hard-file-probe.md" >/dev/null 2>&1 || true
+  if ! grep -q 'zz-hard-file-probe.md' "${hf}"; then
+    record_pass "lint-hard-file: (b) arquivo limpo não escreve nada sobre si"
+  else record_fail "lint-hard-file: (b)" "violação HARD inventada para a fixture boa"; fi
+  # (d) SEM a variável (o caso normal): o lint chega ao SUMÁRIO contando a HARD. A 1ª forma terminava o ramo HARD
+  #     de violation() com `[ -n "$VAR" ] && echo`, que devolve 1 sem a variável — o lint abortava e as 4 faixas
+  #     do CI do PR #944 quebraram; o caso (a), que sempre definia a variável, não via isso.
+  cp "${fx}" "${dir}/zz-hard-file-probe.md"
+  local _noenv; _noenv="$(env -u ONION_LINT_HARD_FILE bash "${SANDBOX}/.claude/validation/lint-artifacts.sh" --only="${dir}/zz-hard-file-probe.md" 2>&1 || true)"
+  if grep -qE 'Violações HARD : [1-9]' <<< "${_noenv}"; then
+    record_pass "lint-hard-file: (d) sem a variável o lint chega ao sumário e conta a HARD (não aborta)"
+  else record_fail "lint-hard-file: (d) o lint aborta sem a variável" "$(tail -2 <<< "${_noenv}" | tr '\n' ' ')"; fi
+  rm -f "${dir}/zz-hard-file-probe.md" "${hf}"
+  # (c) o motor PEDE a lista e a IMPRIME ao reprovar (registro: arquivo que ninguém lê é recurso morto)
+  if grep -q 'ONION_LINT_HARD_FILE="${_tmp}/hard.txt"' "${REPO_ROOT}/ops/pr-finalize.sh" \
+     && grep -q 'as violações HARD do commit' "${REPO_ROOT}/ops/pr-finalize.sh"; then
+    record_pass "lint-hard-file: (c) o pr-finalize pede a lista e a imprime quando reprova"
+  else record_fail "lint-hard-file: (c)" "o motor não usa a lista"; fi
+}
+_family run_lint_hard_file_selftests
+
 run_fixtures_selftests() {
 # SHARD (faixa paralela): ONION_SELFTEST_SHARD=i/n → este worker processa só as linhas do manifest
 # cujo índice % n == i. A família `fixtures` é ~97% do tempo serial (94 casos × ~10 s); sem fatiar,
 # paralelizar por família não ganha nada. Sem a variável = tudo (serial).
-local _shard_i=0 _shard_n=1 _shard_k=0
+local _shard_i=0 _shard_n=1 _shard_k=0 _lane_i=0 _lane_n=1 _lane_k=0
 case "${SELFTEST_SHARD:-}" in */*) _shard_i="${SELFTEST_SHARD%/*}"; _shard_n="${SELFTEST_SHARD#*/}" ;; esac
+case "${SELFTEST_FIXTURES_LANE:-}" in */*) _lane_i="${SELFTEST_FIXTURES_LANE%/*}"; _lane_n="${SELFTEST_FIXTURES_LANE#*/}" ;; esac
 if [ -f "${MANIFEST}" ]; then
   # 6a coluna OPCIONAL `inject` (2026-09-23): o nome do arquivo injetado era FIXO em
   # `selftest-fixture-probe.md`, e isso tornava o §11.1 de commands.md INSATISFAZIVEL para toda guarda
@@ -14603,6 +15315,8 @@ if [ -f "${MANIFEST}" ]; then
     # manifesto ja usa na coluna `target` das linhas `members`.
     [ "${keyword:-}" = "-" ] && keyword=""
     [ "${inject:-}" = "-" ] && inject=""
+    _lane_k=$(( _lane_k + 1 ))
+    [ $(( (_lane_k - 1) % _lane_n )) -eq "${_lane_i}" ] || continue   # faixa da matriz primeiro
     _shard_k=$(( _shard_k + 1 ))
     [ $(( (_shard_k - 1) % _shard_n )) -eq "${_shard_i}" ] || continue
     # CORE-ONLY no adotante (Q_SELFTEST_VENDORIZADO_INSATISFAZIVEL_NO_ADOTANTE, cura (a), 2026-09-03): em repo
@@ -14682,6 +15396,8 @@ _family run_resolve_scope_layers_selftests
 _family run_show_scope_selftests
 
 # Modo resolve-target — targeting fino por seletor no alvo: (F1.2 federação — mata o ruído).
+_family run_env_exposure_selftests
+_family run_pre_push_selftests
 _family run_resolve_target_selftests
 
 # Modo reconcile-inputs — insumos determinísticos do /meta:co-announce --reconcile (conciliação de backlog).
@@ -15726,6 +16442,24 @@ PYABORT
   if grep -q 'famílias=<todas>' <<< "${out}"&& grep -q 'nenhuma família' <<< "${out}"; then
     record_pass "selftest-lanes: (g) failsafe: arquivo desconhecido no domínio ⇒ todas"
   else record_fail "selftest-lanes: (g) failsafe desconhecido" "$(printf '%s\n' "${out}" | tail -1 | cut -c1-120)"; fi
+  # (g2) TODO manifesto de vertical — inclusive um que ninguém cita pelo nome — seleciona as famílias que
+  #      percorrem o diretório inteiro (plugins_sync), e NÃO cai no failsafe "tudo". Medido em
+  #      2026-10-06: onion-engineering/onion-product compravam 217 famílias (27 min, PR #932) porque essas
+  #      duas famílias citavam `verticals` sem a barra final e o mapa só lê como prefixo o que termina em `/`.
+  #      O caminho é montado SEM o prefixo literal de REPO_ROOT de propósito: o mapa captura todo literal
+  #      `${REPO_ROOT}/.claude/...` do corpo da família, e o manifesto inexistente passaria por AUTOCITAÇÃO
+  #      (achado da passada adversarial, 2026-10-06), não pelo prefixo que este caso quer provar.
+  local _vd=".claude/utils/marketplace/verticals" _mf _bad_g2="" _names=()
+  for _mf in "${REPO_ROOT}/${_vd}"/*.manifest.sh; do _names+=("${_mf##*/}"); done
+  _names+=("zz-ninguem-cita.manifest.sh")
+  for _mf in "${_names[@]}"; do
+    out="$(bash "${sut}" --affected "${_vd}/${_mf}" --dry-run 2>&1 || true)"
+    if grep -q 'famílias=<todas>' <<< "${out}" || ! grep -q 'plugins_sync' <<< "${out}"; then
+      _bad_g2="${_bad_g2} ${_mf}"; fi
+  done
+  if [ -z "${_bad_g2}" ]; then
+    record_pass "selftest-lanes: (g2) manifesto de vertical (inclusive um que ninguém cita) ⇒ plugins_sync pelo prefixo, sem failsafe 'tudo'"
+  else record_fail "selftest-lanes: (g2) manifesto caiu no failsafe ou perdeu a família que o cobre" "${_bad_g2}"; fi
   # (h)(i)(j) cópia hermética com famílias sintéticas (REPO_ROOT da cópia = sandbox)
   # o top-level da bancada copia .claude/docs/CLAUDE.md p/ o sandbox e lê inventory.sh --env (grep vazio sob
   # pipefail aborta): a cópia leva .claude/ e docs/ inteiros (33 MB) — REPO_ROOT da cópia = este sandbox
@@ -15774,6 +16508,15 @@ PYI
   if grep -qx '#ONION_SELFTEST_COUNTS 2 0 0' <<< "${out}"; then
     record_pass "selftest-lanes: (n) ONION_SELFTEST_SHARD=1/2 ⇒ metade do manifest (2 de 4)"
   else record_fail "selftest-lanes: (n) shard child" "$(printf '%s\n' "${out}" | tail -1 | cut -c1-100)"; fi
+  # (n2)/(n3) FAIXA DA MATRIZ (2026-10-05): a faixa fatia o manifest ANTES dos workers
+  out="$(ONION_SELFTEST_FIXTURES_LANE=1/2 bash "${copy}" --families fixtures --child 2>&1 || true)"
+  if grep -qx '#ONION_SELFTEST_COUNTS 2 0 0' <<< "${out}"; then
+    record_pass "selftest-lanes: (n2) ONION_SELFTEST_FIXTURES_LANE=1/2 ⇒ metade do manifest (2 de 4)"
+  else record_fail "selftest-lanes: (n2) faixa da matriz" "$(printf '%s\n' "${out}" | tail -1 | cut -c1-100)"; fi
+  out="$(ONION_SELFTEST_FIXTURES_LANE=1/2 ONION_SELFTEST_SHARD=0/2 bash "${copy}" --families fixtures --child 2>&1 || true)"
+  if grep -qx '#ONION_SELFTEST_COUNTS 1 0 0' <<< "${out}"; then
+    record_pass "selftest-lanes: (n3) faixa 1/2 × worker 0/2 ⇒ um quarto do manifest (1 de 4)"
+  else record_fail "selftest-lanes: (n3) faixa × worker" "$(printf '%s\n' "${out}" | tail -1 | cut -c1-100)"; fi
 
   # ── (o)-(q) --report: o relatório legível por máquina não pode custar a integridade da suíte ──
   #
@@ -21191,6 +21934,37 @@ run_door_role_parity_selftests() {
     record_pass "door-role-parity: (g) kind adopter standalone×adopted NÃO é divergência (fronteira semântica)"
   else record_fail "door-role-parity: (g)" "acusou adotante, onde os dois campos respondem perguntas diferentes (rc=${arc}): $(_emit "${aout}" | head -c 200)"; fi
 
+  # (g2)…(g5) ADOTANTE POR COMPATIBILIDADE (2026-10-07, sinal de um adotante): o par registro×carimbo
+  # é julgado por um MAPA (hub→hub; standalone|consumer→adopted), não por igualdade. (g2) e (g3) são os
+  # dois pares incompatíveis medidos no vivo (um hub no registro com `adopted` no carimbo; e `standalone` no carimbo, que
+  # liga o modo porta no lint); (g4) o par legítimo de hub em silêncio; (g5) clone sem carimbo nomeado.
+  # MUTANTE: `_compat_ok` devolvendo sempre 0 reprova (g2) e (g3); voltar a pular `kind: adopter`
+  # reprova os quatro.
+  _drpa() { # $1=registro $2=carimbo ('' = sem .onion-version)
+    rm -f "${d}/porta/.claude/.onion-version"
+    [ -n "$2" ] && printf 'role: %s\n' "$2" > "${d}/porta/.claude/.onion-version"
+    { echo 'members:'; echo '  - id: adotante-de-teste'; echo '    kind: adopter'
+      echo "    role: $1"; echo "    local_path: \"${d}/porta\"" ; } > "${d}/docs/evolution/federation/members.yaml"
+    if _drpa_out="$(bash "${sut}" "${d}" 2>&1)"; then _drpa_rc=0; else _drpa_rc=$?; fi
+  }
+  _drpa hub adopted
+  if [ "${_drpa_rc}" = "1" ] && grep -q 'adotante/PAPEL-INCOMPATIVEL' <<< "${_drpa_out}"; then
+    record_pass "door-role-parity: (g2) adotante hub×adopted é INCOMPATÍVEL (o caso medido em 2026-10-07)"
+  else record_fail "door-role-parity: (g2)" "par incompatível passou calado (rc=${_drpa_rc}): $(_emit "${_drpa_out}" | head -c 200)"; fi
+  _drpa standalone standalone
+  if [ "${_drpa_rc}" = "1" ] && grep -q 'adotante/PAPEL-INCOMPATIVEL' <<< "${_drpa_out}"; then
+    record_pass "door-role-parity: (g3) adotante standalone×standalone é INCOMPATÍVEL (carimbo de porta num adotante)"
+  else record_fail "door-role-parity: (g3)" "carimbo de porta em adotante passou calado (rc=${_drpa_rc}): $(_emit "${_drpa_out}" | head -c 200)"; fi
+  _drpa hub hub
+  if [ "${_drpa_rc}" = "0" ] && ! grep -q 'adotante/' <<< "${_drpa_out}"; then
+    record_pass "door-role-parity: (g4) adotante hub×hub é compatível → SILENCIOSO"
+  else record_fail "door-role-parity: (g4)" "acusou par legítimo de hub (rc=${_drpa_rc}): $(_emit "${_drpa_out}" | head -c 200)"; fi
+  _drpa standalone ''
+  if [ "${_drpa_rc}" = "1" ] && grep -q 'adotante/CARIMBO-AUSENTE' <<< "${_drpa_out}"; then
+    record_pass "door-role-parity: (g5) adotante com clone e SEM carimbo é nomeado (não passa calado)"
+  else record_fail "door-role-parity: (g5)" "clone sem carimbo passou calado (rc=${_drpa_rc}): $(_emit "${_drpa_out}" | head -c 200)"; fi
+  mkdir -p "${d}/porta/.claude"
+
   # (h) YAML LEGAL com ASPAS não pode cegar a guarda. A 1ª versão lia por regex: `kind: "door"` fazia a
   # porta DESAPARECER — e a guarda então AFIRMAVA "nenhuma porta no registro", que é pior que um erro,
   # é uma afirmação falsa. Achado de passada adversarial, 2026-09-30.
@@ -21756,6 +22530,35 @@ run_hook_regen_table_selftests() {
     record_pass "hook-regen: (b) a tabela roda ANTES do re-carimbo do SHA da REGRA 56 (l.${l_tab} < l.${l_sha})"
   else record_fail "hook-regen: (b)" "tabela (l.${l_tab:-?}) não precede o carimbo (l.${l_sha:-?}) — o hash nasceria caduco"; fi
 
+  # (r56) NÃO LAVA RESÍDUO (2026-10-06): o pre-commit recarimbava o hash da REGRA 56 sem conferir o código
+  #       revisado — código mudado depois da revisão saía carimbado. Por EXECUÇÃO, sourçando a lib real:
+  #       pendente ⇒ carimba os dois; código igual ⇒ só o diff; código MUDADO ⇒ não toca (rc 1).
+  local _rw; _rw="$(mktemp -d)"
+  (
+    set -uo pipefail
+    cd "${_rw}" && git init -q -b main && git config user.email t@t && git config user.name t
+    echo base > a.txt && git add a.txt && git commit -qm base && git update-ref refs/remotes/origin/main HEAD
+    git checkout -qb pr && echo v1 > a.txt && mkdir -p docs/evolution/review
+    printf -- '---\nreviewed_diff_sha256: pendente\nverdict: APROVADO\n---\n' > docs/evolution/review/pr.md
+    git add -A
+    # shellcheck source=/dev/null
+    . "${REPO_ROOT}/.claude/validation/onion-regen-lib.sh"
+    R=docs/evolution/review/pr.md
+    onion_r56_restamp "$R" "$R" "$(printf '%064d' 1)" >/dev/null || { echo "FALHA pendente-rc"; exit 0; }
+    c1="$(sed -n 's/^reviewed_code_sha256: //p' "$R")"
+    grep -q "^reviewed_diff_sha256: $(printf '%064d' 1)$" "$R" && [ -n "${c1}" ] || { echo "FALHA pendente-carimbo"; exit 0; }
+    onion_r56_restamp "$R" "$R" "$(printf '%064d' 2)" >/dev/null || { echo "FALHA igual-rc"; exit 0; }
+    grep -q "^reviewed_diff_sha256: $(printf '%064d' 2)$" "$R" || { echo "FALHA igual-carimbo"; exit 0; }
+    echo v2 > a.txt && git add a.txt
+    if onion_r56_restamp "$R" "$R" "$(printf '%064d' 3)" >/dev/null; then echo "FALHA mudado-lavou"; exit 0; fi
+    grep -q "^reviewed_diff_sha256: $(printf '%064d' 2)$" "$R" || { echo "FALHA mudado-tocou"; exit 0; }
+    echo OK
+  ) > "${_rw}/out" 2>&1
+  if [ "$(tail -1 "${_rw}/out")" = OK ]; then
+    record_pass "hook-regen: (r56) recarimbo só do que a revisão viu — pendente carimba os dois, código igual só o diff, código mudado não toca"
+  else record_fail "hook-regen: (r56) o recarimbo lava resíduo" "$(tail -1 "${_rw}/out")"; fi
+  rm -rf "${_rw}"
+
   # ── COMPORTAMENTO do motor, por EXECUÇÃO: extrai `_onion_regen` e exercita as 3 polaridades.
   #    A bancada copia as OPÇÕES DE SHELL do runner ([[bancada-espelha-o-runner]]).
   local d; d="$(mktemp -d)"; trap 'rm -rf "'"${d}"'"' RETURN
@@ -21916,6 +22719,30 @@ _family run_workflow_syntax_selftests
 # foi shardar em 4 faixas de matriz. Dai em diante, QUALQUER familia que o plano perca deixa de
 # ser exercida no CI — e o job sai VERDE, porque as faixas que rodaram passaram. O plano virou
 # superficie critica: perder familia e pior que reprovar, porque nao aparece.
+# ── PRÉ-VOO do motor (2026-10-07): as famílias que o diff alterou por dentro, para rodar no ambiente do runner
+run_preflight_families_selftests() {
+  local sut="${REPO_ROOT}/ops/testing/preflight-families.sh"
+  if [ ! -f "${sut}" ]; then record_fail "preflight-families" "SUT ausente: ${sut}"; return; fi
+  local d out; d="$(mktemp -d)"
+  (
+    cd "${d}" && git init -q -b main && git config user.email t@t && git config user.name t
+    mkdir -p .claude/validation
+    printf 'run_alfa_selftests() {\n  echo a\n}\nrun_beta_selftests() {\n  echo b\n}\n' > .claude/validation/lint-selftest.sh
+    git add -A && git commit -qm base && git update-ref refs/remotes/origin/main HEAD
+    git checkout -qb pr && sed -i 's/echo b/echo B mudou/' .claude/validation/lint-selftest.sh && git add -A
+  ) >/dev/null 2>&1
+  out="$(cd "${d}" && bash "${sut}" 2>&1)" || true
+  if grep -q 'beta' <<< "${out}" && grep -q 'shell_pipefail_robustness' <<< "${out}" && ! grep -q 'alfa' <<< "${out}"; then
+    record_pass "preflight-families: (a) acha a família alterada (beta), soma a catraca e não acusa a intocada (alfa)"
+  else record_fail "preflight-families: (a)" "saída: ${out}"; fi
+  rm -rf "${d}"
+  # (b) o motor chama o pré-voo no ambiente do runner (useConfigOnly), sob checkpoint
+  if grep -q 'preflight-families.sh' "${REPO_ROOT}/ops/pr-finalize.sh" && grep -q 'useConfigOnly = true' "${REPO_ROOT}/ops/pr-finalize.sh"; then
+    record_pass "preflight-families: (b) o pr-finalize roda o pré-voo com git sem identidade adivinhada"
+  else record_fail "preflight-families: (b)" "o motor não chama o pré-voo no ambiente do runner"; fi
+}
+_family run_preflight_families_selftests
+
 run_shard_plan_selftests() {
   local sut="${REPO_ROOT}/ops/testing/selftest-shard-plan.sh"
   if [ ! -f "${sut}" ]; then record_skip "shard-plan: o SUT nao existe (${sut})"; return; fi
@@ -21936,10 +22763,15 @@ want = [l.strip() for l in subprocess.run(
     capture_output=True, text=True).stdout.splitlines() if l.strip()]
 if not want:
     print("SEM-LISTA"); raise SystemExit(0)
-if sorted(got) == sorted(want) and len(got) == len(set(got)):
+# `fixtures` vai a TODA faixa, cada uma com a sua fatia (fixtures_lane i/n distinta, cobrindo 0..n-1)
+lanes = sorted(s.get("fixtures_lane", "") for s in sh if "fixtures" in s["familias"].split(","))
+n = len(sh)
+fx_ok = ("fixtures" not in want) or lanes == sorted("%d/%d" % (i, n) for i in range(n))
+rest = [f for f in got if f != "fixtures"]
+if fx_ok and sorted(set(got)) == sorted(want) and len(rest) == len(set(rest)):
     print("OK")
 else:
-    print("DIVERGE perdidas=%d duplicadas=%d" % (len(set(want) - set(got)), len(got) - len(set(got))))
+    print("DIVERGE perdidas=%d duplicadas=%d fixtures_lanes=%s" % (len(set(want) - set(got)), len(rest) - len(set(rest)), lanes))
 ' 2>&1)"
     if [ "${ver}" = "OK" ]; then
       record_pass "shard-plan: (a) cobertura EXATA — nenhuma familia perdida nem duplicada"
@@ -21952,8 +22784,9 @@ else:
   rr="$(printf '%s' "${plano}" | python3 -c '
 import json, sys
 sh = json.load(sys.stdin)
-f1 = sh[0]["familias"].split(",")
-f2 = sh[1]["familias"].split(",") if len(sh) > 1 else []
+# `fixtures` vai a toda faixa por desenho (fatia propria); o round-robin e o das DEMAIS
+f1 = [f for f in sh[0]["familias"].split(",") if f != "fixtures"]
+f2 = [f for f in sh[1]["familias"].split(",") if f != "fixtures"] if len(sh) > 1 else []
 print("OK" if f1 and f2 and f1[0] != f2[0] else "CONTIGUO")
 ' 2>&1)"
   if [ "${rr}" = "OK" ]; then
@@ -21979,6 +22812,54 @@ print("OK" if f1 and f2 and f1[0] != f2[0] else "CONTIGUO")
   else record_fail "shard-plan: (d)" "sem SUT saiu rc=${rcd} (esperado 2 — nao pude planejar != plano vazio)"; fi
   rm -rf "$d"
 
+  # (f) TEMPO MEDIDO (2026-10-07): com a tabela, o LPT põe o caro na faixa mais leve — a faixa mais pesada
+  #     fica abaixo da do round-robin para os MESMOS tempos — e a cobertura continua exata.
+  local _tt _ev; _tt="$(mktemp)"
+  bash "${REPO_ROOT}/.claude/validation/lint-selftest.sh" --list 2>/dev/null | awk 'NR%7==1{print $1"	300";next}{print $1"	"(NR%5+1)*10}' > "${_tt}"
+  _ev="$(ONION_ROOT="${REPO_ROOT}" TT="${_tt}" SUT="${sut}" python3 -c '
+import json, os, subprocess
+t = {l.split("	")[0]: float(l.split("	")[1]) for l in open(os.environ["TT"]) if "	" in l}
+def plan(env):
+    e = dict(os.environ); e.update(env)
+    return json.loads(subprocess.run(["bash", os.environ["SUT"], "4"], capture_output=True, text=True, env=e).stdout)
+def worst(sh): return max(sum(t.get(f, 0) for f in s["familias"].split(",") if f != "fixtures") for s in sh)
+lpt = plan({"ONION_SHARD_TIMES": os.environ["TT"]})
+rr = plan({"ONION_SHARD_TIMES": "/nao/existe"})
+got = sorted(f for s in lpt for f in s["familias"].split(",") if f != "fixtures")
+want = sorted(f for s in rr for f in s["familias"].split(",") if f != "fixtures")
+print("OK %d<%d" % (worst(lpt), worst(rr)) if got == want and worst(lpt) < worst(rr) else "FALHA lpt=%d rr=%d cobre=%s" % (worst(lpt), worst(rr), got == want))
+' 2>&1)"
+  rm -f "${_tt}"
+  case "${_ev}" in
+    OK*) record_pass "shard-plan: (f) com tempo medido, a faixa mais pesada cai (${_ev#OK }) e nenhuma família se perde" ;;
+    *)   record_fail "shard-plan: (f) o plano por tempo não equilibra" "${_ev}" ;;
+  esac
+
+  # (g) A TABELA VERSIONADA É LEGÍVEL (2026-10-07). O plano IGNORA em silêncio linha que não for
+  #     `familia<TAB>segundos` — uma tabela corrompida inteira faria o CI voltar ao round-robin sem
+  #     ninguém ver (a faixa de 25 min estourando de novo). Este caso também é o que faz o mapa da
+  #     bancada reivindicar ops/testing/selftest-family-times.tsv para esta família: antes dele, mudar
+  #     a tabela caía no failsafe "não é citado por nenhuma família" e rodava as 219.
+  #     MUTANTE: uma linha `kg_backlog 927` (espaço no lugar do TAB) na tabela reprova este caso.
+  local _tab="${ONION_SHARD_TIMES_UNDER_TEST:-${REPO_ROOT}/ops/testing/selftest-family-times.tsv}" _tv
+  _tv="$(TAB="${_tab}" python3 -c '
+import os
+ok = bad = 0
+for i, l in enumerate(open(os.environ["TAB"], encoding="utf-8"), 1):
+    l = l.rstrip("\n")
+    if not l or l.startswith("#"): continue
+    p = l.split("\t")
+    try:
+        if len(p) == 2 and p[0] and float(p[1]) >= 0: ok += 1; continue
+    except ValueError: pass
+    bad += 1; print("linha %d ilegível: %r" % (i, l[:60]))
+print("OK %d" % ok if ok and not bad else "FALHA ok=%d ruins=%d" % (ok, bad))
+' 2>&1 | tail -1)"
+  case "${_tv}" in
+    OK*) record_pass "shard-plan: (g) a tabela versionada de tempos é toda legível (${_tv#OK } famílias) — nada cai no round-robin em silêncio" ;;
+    *)   record_fail "shard-plan: (g) tabela de tempos ilegível" "${_tv} (${_tab})" ;;
+  esac
+
   # (e) LISTA VAZIA => exit 1. E o fail-open mais caro num gate de gate: matriz vazia = job verde
   #     que nao exerceu NADA. Fixture: um --list que devolve zero linhas com rc 0.
   local e; e="$(mktemp -d)"; mkdir -p "$e/ops/testing" "$e/.claude/validation"
@@ -21993,6 +22874,32 @@ print("OK" if f1 and f2 and f1[0] != f2[0] else "CONTIGUO")
   rm -rf "$e"
 }
 _family run_shard_plan_selftests
+
+# ── check-member-registered.sh: o registro é lido como YAML, não por regex de fim de linha ───────
+# POR QUE EXISTE (2026-10-07): a regex ancorada no fim da linha não casava `local_path: "/x"  # nota`,
+# e o ops/audit-adopters-registry.sh dava três membros REGISTRADOS como "FORA DO REGISTRO" — um alarme
+# falso numa auditoria que existe para pegar o esquecimento real. (a) é o caso medido; (b) e (c) são as
+# duas polaridades de sempre. MUTANTE: voltar à regex antiga reprova (a).
+run_member_registered_selftests() {
+  local sut="${REPO_ROOT}/.claude/utils/adopt/check-member-registered.sh"
+  if [ ! -f "${sut}" ]; then record_fail "member-registered" "SUT ausente: ${sut}"; return; fi
+  local d; d="$(mktemp -d)"; mkdir -p "${d}/comentado" "${d}/limpo" "${d}/fora"
+  { echo 'members:'
+    echo '  - id: com-comentario'; echo "    local_path: \"${d}/comentado\"   # nota inline"
+    echo '  - id: sem-comentario'; echo "    local_path: \"${d}/limpo\"" ; } > "${d}/members.yaml"
+  local rc
+  rc=0; bash "${sut}" "${d}/comentado" "${d}/members.yaml" >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" -eq 0 ]; then record_pass "member-registered: (a) local_path com comentário inline é reconhecido (o falso FORA DO REGISTRO de 2026-10-07)"
+  else record_fail "member-registered: (a)" "membro registrado com comentário inline saiu rc=${rc}"; fi
+  rc=0; bash "${sut}" "${d}/limpo" "${d}/members.yaml" >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" -eq 0 ]; then record_pass "member-registered: (b) local_path entre aspas sem comentário é reconhecido"
+  else record_fail "member-registered: (b)" "membro registrado saiu rc=${rc}"; fi
+  rc=0; bash "${sut}" "${d}/fora" "${d}/members.yaml" >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" -eq 3 ]; then record_pass "member-registered: (c) repo fora do registro sai rc=3 (o aviso não emudeceu)"
+  else record_fail "member-registered: (c)" "repo fora do registro saiu rc=${rc} (esperado 3)"; fi
+  rm -rf "${d}"
+}
+_family run_member_registered_selftests
 
 # ── REGRA 89: a divida de Aufhebung, e as SEIS evasoes que uma passada adversarial provou ─────
 # POR QUE EXISTE (2026-09-23): a 1a versao desta guarda varria so os `kg:` das baselines — a
