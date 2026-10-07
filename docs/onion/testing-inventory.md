@@ -11,11 +11,11 @@
 
 | Dimensão | Nº | Produtor |
 |----------|---:|----------|
-| Famílias na bancada | **215** | `grep -cE '^_family ' .claude/validation/lint-selftest.sh` |
-| Sítios de asserção (**não** asserções executadas) | **1454** | `grep -cE '^\s*(record_pass\|record_fail\|record_skip) ' .claude/validation/lint-selftest.sh` |
-| Linhas do manifesto de fixtures | **106** | `awk -F'\t' '!/^#/ && NF && $1!="kind"' .claude/validation/fixtures/manifest.tsv` |
+| Famílias na bancada | **221** | `grep -cE '^_family ' .claude/validation/lint-selftest.sh` |
+| Sítios de asserção (**não** asserções executadas) | **1509** | `grep -cE '^\s*(record_pass\|record_fail\|record_skip) ' .claude/validation/lint-selftest.sh` |
+| Linhas do manifesto de fixtures | **108** | `awk -F'\t' '!/^#/ && NF && $1!="kind"' .claude/validation/fixtures/manifest.tsv` |
 | Kinds no manifesto | **6** | idem, `length(k)` da coluna 1 |
-| Arquivos de fixture rastreados | **150** | `git ls-files '.claude/validation/fixtures/*'` menos o manifesto |
+| Arquivos de fixture rastreados | **152** | `git ls-files '.claude/validation/fixtures/*'` menos o manifesto |
 | Regras do lint | **95** | `bash .claude/validation/rules-registry.sh --counts` |
 | — das quais HARD | **84** | idem |
 | — das quais SOFT | **33** | idem |
@@ -23,7 +23,7 @@
 | Pares de modo consumido (REGRA 59) | **58** | `bash .claude/validation/consumed-mode-check.sh .` |
 | — sem teste | **0** | idem |
 | Scripts de validação | **93** | `git ls-files '.claude/validation/*.sh'` |
-| Hooks | **17** | `git ls-files '.claude/hooks/*.sh'` |
+| Hooks | **18** | `git ls-files '.claude/hooks/*.sh'` |
 | Workflows de CI | **0** | `git ls-files '.github/workflows/*.yml'` |
 | Baselines de catraca | **13** | `git ls-files '.claude/validation/*-baseline.txt'` |
 
@@ -33,7 +33,7 @@ Este arquivo conta o que **existe**. Quantas asserções de fato **passaram** é
 execução, vive em `docs/onion/metrics/selftest-runs.jsonl` (**0** envelope(s)
 coletado(s)) e é projetado em [`testing-state.md`](testing-state.md).
 
-A distinção não é formalismo. Há **1454** sítios estáticos de asserção e a última
+A distinção não é formalismo. Há **1509** sítios estáticos de asserção e a última
 execução completa contou **mais** que isso, porque sítio dentro de laço dispara N vezes.
 Publicar o número estático como "tamanho da bancada" trocaria uma defasagem por um erro de
 categoria — e foi por confundir os dois que `689 asserções` sobreviveu em três comentários
