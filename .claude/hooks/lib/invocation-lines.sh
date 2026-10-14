@@ -62,6 +62,98 @@
 # (`bash x.sh`, `source x`, `curl … | bash`), função/alias definidos FORA da string, variável vinda de
 # FORA da string, subprocess de outra linguagem, git/gh chamado por outro programa, `url.*.pushInsteadOf`
 # e config global/de sistema. Lista completa no nó C_TETO_FRONTEIRA_DO_QUE_O_HOOK_VE.
+# RAMO DE PRODUÇÃO (2026-10-12): `main` sempre, mais `gitflow.branch.master` OU a branch padrão LOCAL dos
+# remotos (`refs/remotes/*/HEAD`), ou `master` sem fonte nenhuma. Não vê: `origin/HEAD` defasado do host
+# (`git remote set-head origin -a` o atualiza), produção com outro nome sem nenhuma das fontes, e o padrão
+# de um repo empurrado por URL. Teto no grafo guard-protected-branch-2026-10.
+
+# ── SEM python3: os dois vetos abriam por DENTRO (fix/vetos-fail-closed, 2026-10-11) ────────────
+# Os hooks liam o JSON com python3; sem ele o comando saía VAZIO e o hook dava exit 0 antes de chegar
+# aqui. O `onFailure: block` não cobre exit 0. Medido com PATH sem python3: `git push --force origin
+# main` e `gh pr merge 1` passavam com rc 0 nos dois vetos. As duas funções abaixo são o modo degradado.
+
+# onion_json_string_field <campo> — lê o JSON da entrada padrão e imprime o 1º valor STRING do campo,
+# desescapado o bastante para julgar a forma (\\ \" \n \t \r \/). rc 1 quando o campo não aparece.
+# Aproximação declarada: `\uXXXX` fica literal (o recorte abaixo o trata como construção dinâmica) e, com a
+# chave repetida, vale a 1ª (o python valeria a última; o Claude Code não gera chave repetida).
+# Linear: grep -oE de DFA e um awk só. A 1ª redação desescapava com `${v//…}` do bash, que a passada
+# adversarial mediu quadrático com muitos escapes (41 s a 1 MB de `\"`); o awk faz 1 MB em menos de 1 s.
+onion_json_string_field() {
+  local pat
+  pat='"'"$1"'"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"'
+  grep -oE "$pat" | head -n1 | awk 'BEGIN { RS = "\002"; found = 0 }
+    { found = 1; v = $0; sub(/\n$/, "", v); sub(/^[^:]*:[[:space:]]*"/, "", v); sub(/"$/, "", v)
+      gsub(/\\\\/, "\001", v); gsub(/\\"/, "\"", v); gsub(/\\n/, "\n", v); gsub(/\\t/, "\t", v)
+      gsub(/\\r/, "\r", v); gsub(/\\\//, "/", v); gsub(/\001/, "\\", v)
+      printf "%s", v }
+    END { exit found ? 0 : 1 }'
+}
+
+# onion_nopy_touches <force-main|merge-gate> <texto> — rc 0 quando, SEM tokenizador, o texto PODE tocar
+# o objeto do veto (o hook então fecha); rc 1 quando não pode (passa). O recorte foi medido nos 31.183
+# comandos Bash únicos dos transcripts do core (2026-10-11): fechar pela forma da lib inteira barraria
+# 4,36% (o `gh api` de leitura é 853 deles). Este recorte fecha 2,12% no protect-main e 5,71% no merge-gate:
+# a 1ª redação fechava 0,38% e 2,75%, e as duas regras abaixo (aspas e dinâmica), que a passada adversarial
+# exigiu por fail-open medido, custaram a diferença — no modo degradado, fechar a mais é o lado certo do erro.
+# O push do merge-gate não foi afinado por marca de main/HEAD/push nu: cobriria 445 dos 502 e abriria espaço
+# para fail-open.
+#  · antes de casar, aspas e `\` saem do texto: o shell junta `pu''sh` e `p\ush` em `push`, e o regex
+#    tem de ver o que o shell vê (fail-open medido pela passada adversarial);
+#  · construção DINÂMICA (`$`, crase, xargs, eval, `\u00..` no JSON) com git/gh e uma palavra do objeto em
+#    qualquer lugar fecha: `R=merge; gh api …/$R` e `printf 'push…' | xargs git` não se provam sem tokenizador;
+#  · no protect-main a marca de force é procurada no MESMO segmento do push (`rm -rf x && git push` passa).
+onion_nopy_touches() {
+  local kind="$1" t a='[^[:alnum:]_]' seg='[^;&|]*' dyn kw
+  t=$(printf '%s' "$2" | tr -d "\"'\\\\")
+  local push="(^|${a})git(${a}${seg})?${a}(push|send-pack)(${a}|\$)"
+  dyn=0
+  if grep -qE '\$|`|(^|[^[:alnum:]_])(xargs|eval)([^[:alnum:]_]|$)|\\u00[2-7]' <<< "$2" \
+     && grep -qE "(^|${a})(git|gh)(${a}|\$)" <<< "$t"; then dyn=1; fi
+  case "$kind" in
+    force-main)
+      [ "$dyn" = 1 ] && grep -qE 'push|send-pack' <<< "$t" && return 0
+      local _segs; _segs="$(printf '%s' "$t" | tr ';&|' '\n\n\n' | grep -E "$push" || true)"
+      grep -qE -- '--force|--mi|(^|[[:space:]])-[[:alnum:]]*f[[:alnum:]]*([[:space:]]|$)|[[:space:]:]\+[^[:space:]]' <<< "$_segs"
+      ;;
+    merge-gate)
+      kw='push|send-pack|merge|graphql|contents|git/refs|sync'
+      [ "$dyn" = 1 ] && grep -qE "$kw" <<< "$t" && return 0
+      grep -qE "$push|mergePullRequest|(^|${a})gh(${a}${seg})?${a}merge(${a}|\$)|(^|${a})gh(${a}${seg})?${a}api(${a}${seg})?(merge|contents|git/refs|graphql)|(^|${a})gh(${a}${seg})?${a}repo${a}${seg}sync(${a}|\$)" <<< "$t"
+      ;;
+    *) return 0 ;;
+  esac
+}
+
+# onion_protected_branches <dir> — os ramos de PRODUÇÃO do repo, um por linha: `main` sempre, mais
+# `gitflow.branch.master`/`.main` OU, sem ela, a branch padrão de cada remoto (`refs/remotes/*/HEAD`); sem nenhuma
+# fonte, `master` por convenção. Espelho bash de `protected_branches` do tokenizador (Q_VETO_DE_FORCE_
+# PUSH_SO_PROTEGE_O_LITERAL_MAIN, 2026-10-12): os hooks o usam no fallback de push NU sentado no ramo.
+onion_protected_branches() {
+  local d="${1:-.}" k v found=0 heads
+  echo main
+  for k in gitflow.branch.master gitflow.branch.main; do
+    v="$(git -C "$d" config --get "$k" 2>/dev/null || true)"
+    if [ -n "$v" ]; then echo "${v#refs/heads/}"; found=1; fi
+  done
+  # o gitflow nomeia a produção e tem precedência sobre a branch padrão do remoto (que num gitflow é a develop)
+  if [ "$found" = 0 ]; then
+    heads="$(git -C "$d" for-each-ref --format='%(symref)' 'refs/remotes/*/HEAD' 2>/dev/null \
+      | sed -nE 's#^refs/remotes/[^/]+/(.+)$#\1#p' || true)"
+    if [ -n "$heads" ]; then printf '%s\n' "$heads"; found=1; fi
+  fi
+  [ "$found" = 1 ] || echo master
+}
+
+# onion_on_protected_branch <dir> — rc 0 quando a branch ATUAL do diretório é um ramo de produção.
+onion_on_protected_branch() {
+  # a lista vai para variável ANTES do `grep -q`: no pipe direto, sob pipefail, o grep que fecha cedo
+  # devolveria o SIGPIPE do produtor como rc (a classe pipefail-epipe-early-closer)
+  local cur list
+  cur="$(git -C "${1:-.}" branch --show-current 2>/dev/null || true)"
+  [ -n "$cur" ] || return 1
+  list="$(onion_protected_branches "${1:-.}")"
+  grep -qxiF -- "$cur" <<< "$list"
+}
 
 onion_invocation_lines() {
   local cmd="$1" root
@@ -69,7 +161,7 @@ onion_invocation_lines() {
   # Python AUSENTE ou morto: só fecha se o texto tem a FORMA do que os vetos guardam — senão todo
   # comando da sessão seria vetado por falta de motor.
   ONION_ROOT="$root" ONION_CWD="${ONION_CWD:-$PWD}" python3 /dev/fd/4 3<<<"$cmd" 4<<'ONION_TOKENIZER_PY' 2>/dev/null \
-    || { printf '%s' "$cmd" | grep -qE 'mergePullRequest|(^|[^[:alnum:]_])gh([^[:alnum:]_][^;&|]*)?[^[:alnum:]_](merge|api)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])git([^[:alnum:]_][^;&|]*)?[^[:alnum:]_]push([^[:alnum:]_]|$)' \
+    || { grep -qE 'mergePullRequest|(^|[^[:alnum:]_])gh([^[:alnum:]_][^;&|]*)?[^[:alnum:]_](merge|api)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])git([^[:alnum:]_][^;&|]*)?[^[:alnum:]_]push([^[:alnum:]_]|$)' <<< "$cmd" \
          && printf '__ONION_UNANALYZABLE__ merge=1 main=1 :: %s\n' "$(printf '%s' "$cmd" | tr '\n' ' ' | cut -c1-400)"; }
 import os, re, shlex, subprocess, sys, codecs
 
@@ -90,6 +182,7 @@ LAST_CFG = [{}]                  # config de `-c` do último git analisado (deci
 GH_SETDEFAULT = [False]          # `gh repo set-default` na string: o repositório do gh deixa de ser o do diretório
 DEFAULT_RE = re.compile(r"symbolic-ref|origin/HEAD|defaultBranchRef|default_branch|init\.defaultBranch")
 CWD = [None]                     # pilha do diretório julgado; None = a raiz do projeto
+MOAT = False                     # juiz do MOAT por alvo (moat-judge.py), ligado só pelo pretooluse-moat-gate.sh
 
 KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}",
             "case", "esac", "coproc"}
@@ -178,6 +271,40 @@ def current_branch(path):
     if path == UNKNOWN:
         return "__UNKNOWN__"
     return _git(["-C", path or JCWD, "branch", "--show-current"])
+
+
+_PROT = {}
+
+
+def protected_branches(path):
+    """Ramos de PRODUÇÃO do repo onde o comando roda: `main` SEMPRE, mais o resolvido — config do
+    gitflow (`gitflow.branch.master`/`.main`) OU, sem ela, a branch padrão de cada remoto
+    (`refs/remotes/*/HEAD`). Sem nenhuma das duas fontes, `master` entra por convenção (fechado). A 1ª forma dos vetos só via
+    `main` literal: num adotante gitflow cuja produção é `master`, `git push origin +master` saía rc=0
+    (Q_VETO_DE_FORCE_PUSH_SO_PROTEGE_O_LITERAL_MAIN, medido em 2026-10-05). A linha canônica segue
+    escrevendo `main` como o NOME do ramo protegido — os hooks julgam esse token. Espelho em bash:
+    `onion_protected_branches` (paridade cobrada pela bancada)."""
+    base = path or JCWD
+    if base == UNKNOWN:
+        return frozenset({"main", "master"})
+    if base not in _PROT:
+        s, resolved = {"main"}, False
+        for key in ("gitflow.branch.master", "gitflow.branch.main"):
+            v = re.sub(r"^refs/heads/", "", _git(["-C", base, "config", "--get", key]))
+            if v:
+                s.add(v); resolved = True
+        # o gitflow NOMEIA a produção e tem precedência: a branch padrão do remoto num gitflow costuma ser a
+        # `develop` (medido num adotante: origin/HEAD→develop, gitflow.branch.master=master) — somá-la
+        # vetaria o force-push da integração, que hoje passa e não é a produção
+        heads = "" if resolved else _git(["-C", base, "for-each-ref", "--format=%(symref)", "refs/remotes/*/HEAD"])
+        for ref in heads.split("\n"):
+            v = re.sub(r"^refs/remotes/[^/]+/", "", ref.strip()) if ref.strip().startswith("refs/remotes/") else ""
+            if v:
+                s.add(v); resolved = True
+        if not resolved:
+            s.add("master")
+        _PROT[base] = frozenset(s)
+    return _PROT[base]
 
 
 _OUR = {}
@@ -644,6 +771,26 @@ def brace_expand(word):
     return out
 
 
+# Opção longa ABREVIADA do `git push` (fix/vetos-fail-closed, passada adversarial, 2026-10-11): o git aceita
+# qualquer prefixo único (`--mi`/`--mirr` = `--mirror`, `--al` = `--all`, `--b` = `--branches`). Medido num
+# remoto bare: `git push --mirr origin` fez "main -> main (forced update)" e passava pelos dois vetos com rc 0.
+# Prefixo ambíguo (`--forc`, `--fo`) o próprio git recusa, e aqui fica como está.
+PUSH_LONG = ("all", "atomic", "branches", "delete", "dry-run", "exec", "follow-tags", "force", "force-if-includes",
+             "force-with-lease", "ipv4", "ipv6", "mirror", "no-verify", "porcelain", "progress", "prune", "push-option",
+             "quiet", "receive-pack", "recurse-submodules", "repo", "set-upstream", "signed", "tags", "thin", "verbose",
+             "verify")
+
+
+def push_long_opt(a):
+    if not a.startswith("--") or len(a) < 3:
+        return a
+    name, eq, val = a[2:].partition("=")
+    if name in PUSH_LONG or (name.startswith("no-") and name[3:] in PUSH_LONG):
+        return a
+    cands = [o for o in PUSH_LONG if o.startswith(name)]
+    return "--" + cands[0] + eq + val if len(cands) == 1 else a
+
+
 PUSH_CFG = re.compile(r"^(remote\.[^=]*\.(push|mirror|pushurl|url)|push\.default|branch\.[^=]*\.(merge|remote|pushremote)|"
                       r"url\.[^=]*\.(pushinsteadof|insteadof))(=|$)", re.I)
 
@@ -728,7 +875,7 @@ def canonical_git(words, where, env=None):
         return "git " + " ".join(rest), None, False
     force, flags, pos, j = False, [], [], 1
     while j < len(rest):
-        a = rest[j]
+        a = push_long_opt(rest[j])
         if a == "--":
             pos += rest[j + 1:]; break
         if a.startswith("--"):
@@ -799,6 +946,10 @@ def canonical_git(words, where, env=None):
     # o 2º falso positivo de produção (2026-09-01), reaberto pela 1ª reescrita (Elenxo, 2ª passada).
     if "__DYNAMIC__" in dsts and force:
         dsts = ["main" if d == "__DYNAMIC__" else d for d in dsts]
+    # o ramo de PRODUÇÃO resolvido (`master` num gitflow clássico) vira o token `main` que os hooks julgam;
+    # vale também para o destino que veio da config/branch atual (push nu), que não passou pelo laço acima
+    prot = {p.lower() for p in protected_branches(where)}   # caixa: o mesmo critério do `main` acima
+    dsts = ["main" if d.lower() in prot else d for d in dsts]
     if "--dry-run" in flags or "-n" in flags:
         return "git push --dry-run (inerte)", remote, True
     return "git push" + (" --force" if force else "") + "".join(" " + f for f in flags) + \
@@ -894,7 +1045,12 @@ def touches_main(text, where=None):
     t = text
     if re.search(r"(^|[\s:/+])(refs/heads/|heads/)?main($|[\s:])|--mirror|--all\b|(^|\s)(HEAD|@)($|\s|:)", t):
         return True
-    return current_branch(where) == "main"
+    if any(push_long_opt(w) in ("--mirror", "--all", "--branches") for w in t.split()):
+        return True
+    prot = protected_branches(where)
+    if any(re.search(r"(^|[\s:/+])(refs/heads/|heads/)?" + re.escape(p) + r"($|[\s:])", t) for p in prot):
+        return True
+    return current_branch(where) in prot
 
 
 def emit_unanalyzable(words, where=None, unknown_target=False):
@@ -1011,6 +1167,8 @@ def command(seg, depth, cond=False, piped=False, stdin_from=None):
         # shell/source lendo código de `<(…)`: fecha SÓ se o texto de dentro tem a forma do que os vetos
         # guardam. A 1ª versão disparava com QUALQUER `$(…)` como argumento (`bash x.sh "$(y)"`) e
         # vetou 20 comandos honestos na reexecução do corpus completo.
+        if MOAT:
+            moat_unanalyzable(PSUBST_TEXTS + list(seg), "shell lendo substituição de processo")
         if any(relevant([t]) for t in PSUBST_TEXTS):
             OUT.append("__ONION_UNANALYZABLE__ merge=1 main=1 :: shell/source lendo substituição de processo: " + " ".join(seg))
         return
@@ -1035,6 +1193,8 @@ def command(seg, depth, cond=False, piped=False, stdin_from=None):
     try:
         words = strip_prefix(words, env)
     except Unanalyzable:
+        if MOAT:
+            moat_unanalyzable(seg, "invólucro com opção só conhecida em runtime")
         if relevant_tokens(seg) or relevant([" ".join(seg)]):
             emit_unanalyzable(seg, CWD[-1])
         return
@@ -1055,6 +1215,8 @@ def command(seg, depth, cond=False, piped=False, stdin_from=None):
             emit_unanalyzable(seg); return
     name = words[0]
     if DYNAMIC.search(name) or re.search(r"\{[^}]*(,|\.\.)[^}]*\}", name):
+        if MOAT:
+            moat_unanalyzable(seg, "nome de comando só conhecido em runtime")
         if name.endswith("/ops/pr-merge-verified.sh"):
             return                                      # o caminho verificado, chamado por $(…)/ops/…
         if relevant_loose(seg):
@@ -1064,6 +1226,8 @@ def command(seg, depth, cond=False, piped=False, stdin_from=None):
         emit_unanalyzable(list(words) + list(seg), CWD[-1])   # IFS alterado: o word-splitting não se modela
         return
     base = os.path.basename(name)
+    if MOAT:
+        moat_command(words, raw_words, base, depth, env, piped, stdin_from)
     if base == "function" and len(words) >= 2:
         rest = [w for w in words[2:] if w not in ("{", "}")]
         if rest:
@@ -1176,8 +1340,8 @@ def command(seg, depth, cond=False, piped=False, stdin_from=None):
         if tb in ("git", "gh") and (len(tail) < 2 or opaque(tail[1]) or (tb == "gh" and tail[1] == "pr" and (len(tail) < 3 or opaque(tail[2])))):
             emit_unanalyzable(words, CWD[-1], unknown_target=True); return   # o SUBCOMANDO vem do stdin
         if tb == "git" and "push" in tail:
-            forced = any(t.startswith("--force") or t == "--mirror" or (t.startswith("-") and not t.startswith("--") and "f" in t) or t.startswith("+") for t in tail)
-            if forced or current_branch(CWD[-1]) == "main":
+            forced = any(push_long_opt(t).startswith("--force") or push_long_opt(t) == "--mirror" or (t.startswith("-") and not t.startswith("--") and "f" in t) or t.startswith("+") for t in tail)
+            if forced or current_branch(CWD[-1]) in protected_branches(CWD[-1]):
                 emit_unanalyzable(words, CWD[-1], unknown_target=True)
             return                                      # push sem force de destinos do stdin, fora da main
         if tb == "gh" and len(tail) >= 2 and tail[1] == "api" and not any("/" in w for w in tail[2:]):
@@ -1207,6 +1371,12 @@ def command(seg, depth, cond=False, piped=False, stdin_from=None):
         OUT.append(canonical_gh(words))
 
 
+if os.environ.get("ONION_MOAT_JUDGE"):
+    # o juiz do MOAT mora em arquivo próprio e roda NESTE namespace (usa o tokenizador inteiro); só o
+    # pretooluse-moat-gate.sh o liga — os vetos de merge/force-push seguem idênticos sem a variável
+    _mj = os.environ["ONION_MOAT_JUDGE"]
+    exec(compile(open(_mj, encoding="utf-8").read(), _mj, "exec"))
+    MOAT = True
 raw = os.fdopen(3).read()
 if raw.endswith("\n"):
     raw = raw[:-1]
@@ -1220,6 +1390,10 @@ except Exception as e:
              [l for l in OUT if l.startswith("__ONION_UNANALYZABLE__")]
     if relevant([raw]):
         emit_unanalyzable(raw)
+    if MOAT:
+        moat_unanalyzable(raw, "comando que o analisador não conseguiu ler")
+if MOAT:
+    OUT.append("__ONION_MOAT_OK__")                 # o hook só confia na análise que chegou ao fim
 print("\n".join(OUT))
 ONION_TOKENIZER_PY
 }

@@ -42,13 +42,19 @@ A doutrina inteira: `.claude/commands/common/prompts/research-doctrine.md` (10 c
    ```
    Fases: Corpus → Scope (ângulos do tema + 5 eixos fixos) → Search → Fetch (tier/kind/validFrom por fonte)
    → Verify (3 votos, 2 refutam; `vendor-on-competitor` sem primária = refutada) → Synthesize (seção
-   **mercado obrigatória**) → **write(KG)** (o agente escreve o grafo e prova radar exit 0; sem 0 o run
-   devolve erro).
+   **mercado obrigatória**) → **write(KG)** (o agente escreve o grafo; um **verificador separado**, que não
+   escreveu, roda o radar e o contrato, e o laço de correção é contado no motor, até 3 tentativas;
+   sem radar 0 pelo verificador o run devolve erro, e `writeAttempts` mostra o declarado contra o medido).
 5. **Depois do run** (o que o workflow não faz): `SYNTHESIS.md` como PROJEÇÃO do grafo com o contrato de
    custo no frontmatter (`kg:`, `run_id`, `tokens`, `agents`, `duration_min`) e as seções **NÃO-VERIFICADOS**
    (do retorno: `unverified`, `refuted` por fonte fraca, `notVerifiedByBudget`, `budgetDropped`) e
    **valeu-a-pena** (tokens ÷ nós); `meta.review_after` pela cadência do tipo dominante (REGRA 67);
-   `docs/backlog.md` regenerado se houver nó open; resíduo REGRA 56; PR pelo fluxo normal.
+   `docs/backlog.md` regenerado **depois do `git add` do grafo** se houver nó open (o projetor só enxerga
+   grafo rastreado e AVISA no stderr os que ficaram de fora); resíduo REGRA 56; PR pelo fluxo normal.
+   Para a REGRA 29 enxergar a `SYNTHESIS.md`, um nó a cita em `trace:` — **num nó que ainda não tem
+   `trace:`**: acrescentar uma segunda linha `trace:` num nó que já tem uma deixa a chave repetida, o
+   leitor YAML fica com a última em silêncio, e o radar reprova (medido em 2026-10-07: 4 grafos de
+   pesquisa nasceram assim).
 6. **Se a pergunta é para DECIDIR** ("devo", "vale a pena", "qual escolher", "o que podar"): passe `mode: 'decision'`
    nos `args`. O workflow ganha a fase **Elenxo** (refutador opus/high, default REPROVADO): refuta cada achado **e**
    interroga cada descarte — *"por evidência ou por comodismo/hype/orçamento?"*; o descarte por comodismo volta
