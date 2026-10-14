@@ -25,6 +25,9 @@ O mínimo que não se negocia aqui:
   nomeado** · `rejeitar` com razão datada. "Promissor" e "vale acompanhar" são parque sem gatilho.
 - **`source_tier` é a escala DREAM 1–10 — 10 é a MAIS FORTE**, `<= 3` é fraca. (Linha escrita
   porque um arquivamento da SEC foi carimbado `source_tier: 1` em 2026-10-01, lendo ao contrário.)
-- **Marcadores obrigatórios** para o censo achar: `meta.dissect_tool:`, `dissect_level:` por nó,
-  `dissect_verdict:` no nó de decisão.
+- **Marcadores obrigatórios** para o censo achar: `meta.x_dissect_tool:`, `x_dissect_level:` por nó,
+  `x_dissect_verdict:` no nó de decisão.
+- **`absorver`/`costurar` no N4 escreve o plano como nós `x_absorb_*`** (alvo, peças, origem com
+  pin, licença, forma, paridade) e passa em `dissect-plans.sh . <ferramenta>` com rc 0 —
+  é o que o `/meta:forge` lê. Peça que "já existe" não se digita: o leitor mede.
 - **Grafo primeiro, prosa depois** — `kg-radar` exit 0 antes de qualquer `SYNTHESIS.md`.

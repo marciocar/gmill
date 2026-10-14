@@ -1,5 +1,5 @@
 ---
-description: Disseca uma ferramenta de terceiro em niveis selecionaveis (identidade, capacidade, mecanismo, transferibilidade, absorcao) e propoe absorver, costurar, parquear ou rejeitar. Core-only.
+description: Disseca uma ferramenta de terceiro em niveis selecionaveis (identidade, capacidade, mecanismo, transferibilidade, absorcao) e propoe absorver, costurar, parquear ou rejeitar.
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, WebFetch, TodoWrite
 ---
 
@@ -15,6 +15,8 @@ promete — vive em [`common:prompts:dissect-doctrine`](../common/prompts/dissec
 
 ## Degrau e limites
 
+- **Viaja para todo papel menos o onion-mini** (decisão do maestro, 2026-10-14): o time de um hub disseca
+  as ferramentas de terceiro que pensa adotar, com o mesmo método do core.
 - **Maestro-invocado.** Não auto-inicia, sem cron, sem `/loop` sobre si (MOAT W7).
 - **Não sela.** Produz o plano e **1 nó `decision` OPEN** por ferramenta; quem sela é o maestro.
 - **Executar é ato isolado.** Ferramenta de terceiro roda em worktree/container — nunca na árvore
@@ -61,13 +63,28 @@ não gasta o plano de absorção em algo que ainda vai ser rejeitado).
 2. **ENQUADRAR** — para cada ferramenta, o nível de entrada (do censo) e o nível-alvo (`--level`).
 3. **DISSECAR** — orquestra via skill `onion-orchestration` reusando o motor já provado da
    pesquisa: `.claude/workflows/onion-research.js` com `mode: 'decision'` (Elenxo + nó `D_` open),
-   um worker por nível, **tier por complexidade** (N0/N1 `haiku/low` · N2 `sonnet/high` ·
-   N3/N4 `opus/high`). O gate de nível roda em JS, custo 0 tokens: reprovado não dispara o worker
-   seguinte.
+   **tier por complexidade** (N0/N1 `haiku/low` · N2 `sonnet/high` · N3/N4 `opus/high`).
+   ⚠️ **Medido em 2026-10-11 (dogfood do SAC-77):** o motor **não conhece níveis** —
+   `grep -ci dissect` nele dá **0**. O "um worker por nível com gate em JS" é **desenho, não
+   implementação**. Até existir, a escada é conduzida pela sessão (direto, nível a nível, sem
+   subir o reprovado), e o grafo **declara** que foi assim. Sessão que já é subagente não
+   orquestra: disseca direto.
 4. **VEREDITO** — um dos quatro, com razão escrita. `parquear` **exige gatilho nomeado**.
+4b. **PLANO DE ABSORÇÃO (só `absorver`/`costurar`, N4)** — a passagem para o
+   [`/meta:forge`](forge.md). Um nó por peça a absorver, no MESMO grafo, com:
+   `x_absorb_target:` (candidato como o `forge-census.sh` o nomeia, ou `novo:<nome>`) ·
+   `x_absorb_pieces:` (quais das 7, ex. `"4,7"`) · `x_absorb_origin:` (URL **com pin** — sha ou
+   tag) · `x_absorb_license:` (SPDX ou `proprietary`) · `x_absorb_form:` (`reescrita` ·
+   `adapter-sdaal` · `vendor-pin`; proprietário **nunca** `vendor-pin`) · `x_absorb_parity:` (o
+   caso que prova que a peça faz o que a original fazia, **nomeando** a família
+   `run_<n>_selftests`). **Não escreva quais peças já existem** — o leitor as mede ao vivo:
+   `bash .claude/validation/dissect-plans.sh . <ferramenta>` (rc 1 = plano INCOMPLETO,
+   com o motivo). Rode-o antes do passo 5 e só siga com rc 0. O leitor mora do lado do forge
+   (core e standalone): no plugin `onion-meta` o forge não viaja, o leitor também não, e o plano
+   fica no grafo esperando quem o forje.
 5. **DESTINO (peça 5)** — `write(KG)` em
    `docs/evolution/dissect/<ferramenta>-<AAAA-MM>/<ferramenta>-<AAAA-MM>.kg.yaml` com os
-   marcadores que o censo lê (`meta.dissect_tool:`, `dissect_level:` por nó, `dissect_verdict:` no
+   marcadores que o censo lê (`meta.x_dissect_tool:`, `x_dissect_level:` por nó, `x_dissect_verdict:` no
    nó de decisão), `meta.review_after` pela cadência (ferramenta/preço 30d), `# kg-backlog-guard:
    on` e `# ═══ TETO: N NÓS ═══`. **`kg-radar` exit 0 é obrigatório** antes de qualquer prosa.
    O `SYNTHESIS.md` é **projeção**, com o **contrato de custo** no frontmatter: `kg:` · `run_id` ·

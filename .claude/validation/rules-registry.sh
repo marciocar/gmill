@@ -7,9 +7,10 @@
 # / "SOFT"). Assim o registro reflete o comportamento, não uma promessa que pode ter driftado.
 #
 # Imprime markdown em stdout; o arquivo .claude/validation/lint-rules.md é a PROJEÇÃO (a guarda
-# REGRA 39 regenera e compara). FALHA (exit 2) nas 6 catracas de clareza: número duplicado ·
+# REGRA 39 regenera e compara). FALHA (exit 2) nas 7 catracas de clareza: número duplicado ·
 # regra sem categoria · sem `# previne:` · sem tag [SEV] · severidade indefinida · regra ÓRFÃ
-# (header sem função própria — rouba a função da seguinte e publica severidade falsa).
+# (header sem função própria — rouba a função da seguinte e publica severidade falsa) · regra
+# EMITIDA pelo dispatcher (`violation … "REGRA N`) e ausente do registro (cabeçalho fora da forma).
 #
 # Uso:  bash .claude/validation/rules-registry.sh > .claude/validation/lint-rules.md
 # ===========================================================================
@@ -86,6 +87,33 @@ while i < n:
 
 if dups:
     sys.stderr.write("ERRO rules-registry: numero(s) de REGRA duplicado(s): %s\n" % sorted(set(dups)))
+    sys.exit(2)
+
+# Catraca de CLAREZA nº7 — regra que o DISPATCHER emite e o REGISTRO não vê.
+#
+# DANO MEDIDO (2026-10-11): as REGRAS 98, 99, 100 e 101 nasceram com o cabeçalho
+# `# REGRA N (Título) — HARD`, que `rx` acima não casa. Elas rodavam no lint, emitiam
+# `violation … "REGRA N (…)"`, e ficaram FORA do lint-rules.md — e também do hook
+# rule-title-in-prose.sh e do _rule_map_build do lint, que leem o mesmo cabeçalho. Ninguém acusou
+# porque as catracas 1-6 só olham o que `rx` JÁ casou: cabeçalho que o parser não vê não tem
+# categoria a faltar, previne a faltar nem tag a faltar. A população conferida aqui vem de OUTRA
+# fonte (a mensagem que a guarda emite), e é por isso que ela vê o que as outras não podem ver.
+# TETO (medido pelo refutador, 2026-10-11): ela só vê a regra cujo `violation` cabe numa linha com o
+# prefixo "REGRA N" na mensagem: 26 das 93 hoje. Escapam a emissão multilinha (`violation "SEV" "p" \`,
+# 16 sítios), a mensagem sem prefixo (rotulada pela função) e o cabeçalho com sufixo (`# REGRA 65b — …`,
+# que já vive fora do registro: achado declarado, não curado aqui). A 98-101 caíam todas dentro do alcance.
+emitrx = re.compile(r'violation\s+"[^"]*"\s+"[^"]*"\s+"REGRA (\d+)\b')
+emitted = {}
+for ln, l in enumerate(lines, 1):
+    for em in emitrx.finditer(l):
+        emitted.setdefault(int(em.group(1)), ln)
+unregistered = sorted(x for x in emitted if x not in rules)
+if unregistered:
+    sys.stderr.write(
+        "ERRO rules-registry: REGRA(S) emitida(s) pelo dispatcher e AUSENTE(S) do registro: %s\n"
+        "  (1a emissao na linha: %s). O cabecalho dela nao casa a forma canonica\n"
+        "  `# REGRA N — Titulo [SEV]` — reescreva-o nessa forma em lint-artifacts.sh.\n"
+        % (unregistered, {x: emitted[x] for x in unregistered}))
     sys.exit(2)
 
 # Catraca de CLAREZA (irmã da 'sem categoria'): toda regra declara o MODO-DE-FALHA que
@@ -182,24 +210,24 @@ if orphans:
 CATEGORIES = [
     ("Frontmatter & conformidade de artefato",
      "Campos obrigatórios, válidos e bem-formados no frontmatter de agentes e comandos.",
-     [1, 2, 3, 12, 17, 23, 51]),
+     [1, 2, 3, 12, 17, 23, 51, 102]),
     ("Higiene de artefato",
      "Tamanho saudável, nomes kebab-case, dialeto puro e links que resolvem.",
-     [5, 6, 13, 14, 15, 22, 48, 60, 71, 72, 73, 74, 75, 94]),
+     [5, 6, 13, 14, 15, 22, 48, 60, 71, 74, 94, 98]),
     ("Fronteiras & contratos de arquitetura",
      "Proibições estruturais, documentação no lugar certo e os contratos de conformance e de adoção.",
-     [7, 18, 20, 40, 53, 77]),
+     [7, 18, 20, 40, 53]),
     ("SDAAL — abstração de provider",
      "O consumidor fala com a abstração, nunca com o provider direto.",
-     [10, 11]),
+     [10, 11, 103, 104, 105]),
     ("SSOT anti-drift",
-     "Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, mapas, plugins, topologia.",
-     [8, 9, 16, 19, 21, 27, 37, 39, 41, 50, 59, 62, 63, 70, 76, 80, 81, 83, 84, 85, 90, 92, 96]),
+     "Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, mapas, catálogo, topologia.",
+     [8, 9, 16, 21, 27, 37, 39, 41, 50, 59, 62, 63, 70, 76, 80, 81, 83, 84, 85, 90, 92, 96]),
     ("KG & proveniência",
      "Conhecimento nasce no grafo e não morre em prosa; proveniência com catraca "
      "(por citação e por marcador autodeclarado); e frescor doutrinário — afirmação "
      "sensível-ao-tempo carimbada e dentro do TTL.",
-     [26, 29, 31, 32, 42, 43, 47, 49, 52, 55, 57, 58, 67, 68, 69, 78, 82, 87, 89, 93]),
+     [26, 29, 31, 32, 42, 43, 47, 49, 52, 55, 57, 58, 67, 68, 69, 78, 82, 87, 89, 93, 99]),
     ("Automação Graduada",
      "Classes de ação (HUMAN→MONITORED→DYNAMIC→AUTO) sobem de degrau com gate de promoção alcançável — nenhum rung-jump forjado.",
      [44, 65, 97]),
@@ -208,10 +236,9 @@ CATEGORIES = [
      [24, 25, 28, 38, 46, 66, 95]),
     ("Projeção & privacidade",
      "O que pode sair para superfícies públicas ou vendorizadas — nome de cliente e "
-     "deep-link privado nunca vazam (nem a HOME crua do source privado, num artefato de "
-     "plugin); e o compose commitado nunca publica porta em "
+     "deep-link privado nunca vazam; e o compose commitado nunca publica porta em "
      "0.0.0.0 nem sobe com segredo de fallback.",
-     [30, 33, 34, 35, 36, 45, 61, 64, 79]),
+     [30, 33, 34, 35, 36, 45, 61, 64, 100, 106]),
     ("Processo com resíduo",
      "O trabalho PROPOSTO carrega rastro material de ter sido revisado — o gate cria a cadência, "
      "o worker testa a verdade.",
@@ -225,8 +252,10 @@ CATEGORIES = [
      "que não PARSEIA não é um gate que falhou, é um gate que nunca rodou — e o repo o "
      "contava como existente. A REGRA 88 entrou em 2026-09-20 pela versão mais perversa da "
      "classe: o gate rodava, mas sem árvore — `bash <script do repo>` saía 127, o job reprovava "
-     "TODO PR e a mensagem culpava o código revisado. Gate que nunca olhou, acusando.",
-     [54, 86, 88]),
+     "TODO PR e a mensagem culpava o código revisado. Gate que nunca olhou, acusando. "
+     "A REGRA 101 entrou em 2026-10-11 pela versão do veto: o hook que nem roda (script "
+     "ausente, rc=127) deixava a ação passar — veto que não executou, contado como veto.",
+     [54, 86, 88, 101]),
 ]
 
 seen = {}

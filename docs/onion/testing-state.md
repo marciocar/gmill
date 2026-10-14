@@ -12,13 +12,18 @@
 
 | Dimensão | Nº | Produtor |
 |---|---:|---|
-| Famílias na bancada | **199** | `bash .claude/validation/harness-inventory.sh --env` |
-| Sítios de asserção (estáticos) | **1317** | `bash .claude/validation/harness-inventory.sh --env` |
-| Regras do lint | **91** | `bash .claude/validation/rules-registry.sh --counts` |
-| — HARD | **80** | `bash .claude/validation/rules-registry.sh --counts` |
-| Pares de modo consumido | **53** | `bash .claude/validation/consumed-mode-check.sh .` |
-| — sem teste | **0** | `bash .claude/validation/consumed-mode-check.sh .` |
-| Baselines de catraca | **11** | `git ls-files '.claude/validation/*-baseline.txt'` |
+| Famílias na bancada | **↻ ao vivo** | `bash .claude/validation/harness-inventory.sh --env` |
+| Sítios de asserção (estáticos) | **↻ ao vivo** | `bash .claude/validation/harness-inventory.sh --env` |
+| Regras do lint | **↻ ao vivo** | `bash .claude/validation/rules-registry.sh --counts` |
+| — HARD | **↻ ao vivo** | `bash .claude/validation/rules-registry.sh --counts` |
+| Pares de modo consumido | **↻ ao vivo** | `bash .claude/validation/consumed-mode-check.sh .` |
+| — sem teste | **↻ ao vivo** | `bash .claude/validation/consumed-mode-check.sh .` |
+| Baselines de catraca | **↻ ao vivo** | `git ls-files '.claude/validation/*-baseline.txt'` |
+
+> `↻ ao vivo`: o número muda a cada PR, então **não mora neste painel** (ainda é versionado em
+> `testing-inventory.md`, a projeção do inventário — passo B) — versioná-lo aqui punha este painel em quase todo PR e fazia dois PRs
+> paralelos colidirem nele (passo A de `D_MERGE_PROCESS_ONION_2026_10`). Para ler:
+> `bash .claude/validation/testing-state.sh --live`.
 
 Detalhe completo: [`testing-inventory.md`](testing-inventory.md) (SSOT gerada, catracada).
 
