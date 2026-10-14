@@ -25,7 +25,7 @@
 | Scripts de validação | **109** | `git ls-files '.claude/validation/*.sh'` |
 | Hooks | **20** | `git ls-files '.claude/hooks/*.sh'` |
 | Workflows de CI | **0** | `git ls-files '.github/workflows/*.yml'` |
-| Baselines de catraca | **13** | `git ls-files '.claude/validation/*-baseline.txt'` |
+| Baselines de catraca | **15** | `git ls-files '.claude/validation/*-baseline.txt'` |
 
 ## O que RODOU
 
