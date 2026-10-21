@@ -1,0 +1,325 @@
+meta:
+  id: site-gmill
+  layer: audit
+  schema_version: "1"
+  baseline: "2026-10-21"
+  date: "2026-10-21"
+  review_after: "2027-01-31"
+  purpose: |
+    Mapa do site público da GMill (gmill.com.br), lido em 2026-10-21 por HTTP, sem login. O domínio
+    redireciona para /portal/, que é o Millcompras: o mesmo portal B2B de millcompras.com.br (fonte S1 do
+    business-context). Não existe um site institucional separado: o institucional são duas páginas
+    embutidas no portal. Grafo de fatos do que o site MOSTRA hoje; o que o site afirma sobre a empresa
+    vale como "a empresa diz", não como fato medido.
+  note: |
+    Leia com: bash .claude/validation/kg-radar.sh docs/onion/graph/site-gmill.kg.yaml
+    EN_SITE = o site. E_PAGE_* = cada página ou bloco lido. C_* = o que o site sustenta sobre a empresa e
+    sobre o próprio site. Q_* = lacunas e defeitos. D_* = sugestões. robots.txt (Cloudflare) não declara
+    sinal de conteúdo: nem concede nem restringe. A área logada (preços, pedido) não foi lida.
+
+nodes:
+  # ── O site ───────────────────────────────────────────────────────────────────────────────────
+  - id: EN_SITE
+    node_type: entity
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: curl-gmill.com.br-redireciona-para-portal
+    label: "gmill.com.br redireciona para /portal/, o Millcompras: portal B2B de pedidos da distribuidora, o mesmo de millcompras.com.br."
+    narrative: "Título da página: 'Millcompras'. Rodapé: '© 2013- Millenium Comercial Ltda'. www.gmill.com.br, grupogmill.com.br e www.grupogmill.com.br não responderam. Menu: Home · Grupo Gmill · Central de Relacionamento (SAC) · Cadastro · Quero ser Gmill · Eventos."
+    provenance:
+      source: "https://gmill.com.br/ (redireciona para https://gmill.com.br/portal/)"
+      locator: "título, menu e rodapé da home"
+      method: "leitura: curl da página em 2026-10-21"
+      locality: web
+
+  # ── Páginas e blocos ─────────────────────────────────────────────────────────────────────────
+  - id: E_PAGE_HOME
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: curl-portal-home
+    label: "Home = login do Millcompras + vitrine de banners. Preços, promoções e condições valem só para cliente cadastrado e com documentação dos órgãos públicos em dia."
+    narrative: "Banners (só imagem, sem texto legível): Ofertas Imbatíveis Millenium, Promo de A a Z, promo Dia Mill, Melhores Preços, Maxinutri, Multilab (Xaqueliv), BeeBee, app, e vitrines por laboratório (EMS GEN, Pharmacience e um combo de laboratórios 40;30;51). Cada banner leva a /pedido/criar/<laboratório>/<condição>, que exige login. Pedido sujeito à confirmação de estoque."
+    provenance:
+      source: "https://gmill.com.br/portal/"
+      locator: "corpo da home (banners com classe 'comprar' e data-lab) e aviso do modal de login"
+      method: "leitura: curl da página em 2026-10-21"
+      locality: web
+
+  - id: E_PAGE_GRUPO_GMILL
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 5
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: curl-institucional2.htm
+    label: "Página 'Grupo Gmill': identidade da Gmill Distribuição. Missão: 'Conectamos pessoas com o propósito de cuidar de cada vida'. Visão: 'Ser a escolha em soluções de distribuição que integram o ecossistema de saúde'."
+    narrative: "Valores ('Nosso jeito de ser'): nossa essência é o relacionamento; temos admiração pelas pessoas; somos íntegros; nos preocupamos com o futuro; transparência nas relações trabalhistas, com relatórios semestrais de transparência salarial das empresas do Grupo Gmill. A página não traz link para os relatórios."
+    provenance:
+      source: "https://gmill.com.br/images/portal/html/institucional2.htm (embutida em /portal?p=institucional2)"
+      locator: "texto integral da página"
+      method: "leitura: curl da página em 2026-10-21, decodificada de latin-1"
+      locality: web
+
+  - id: E_PAGE_MILLENIUM
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 5
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: curl-institucional.htm
+    label: "Página 'A Millenium' (texto antigo): Serra/ES, 100% de ES e RJ, 250 colaboradores internos, 130+ representantes, 6.000 m², 5.000 clientes ativos e 60 indústrias parceiras."
+    narrative: "Força de vendas: mais de 130 representantes, 9 supervisores, 1 coordenador regional e 1 gerente nacional; pedidos por internet móvel, pedido eletrônico e call center. Missão: atendimento confiável e pontual, excelência em distribuição e amplo mix, em prol do varejo farmacêutico. Visão: ser a principal escolha em genéricos e similares 'até 2024'. Valores: integridade, simplicidade, comprometimento, inovação, cooperação, equilíbrio, pertencimento. Lema: 'superar as próprias metas, com responsabilidade, bom atendimento e compromisso'."
+    provenance:
+      source: "https://gmill.com.br/images/portal/html/institucional.htm (embutida em /portal/?p=institucional)"
+      locator: "texto integral da página"
+      method: "leitura: curl da página em 2026-10-21, decodificada de latin-1"
+      locality: web
+
+  - id: E_PAGE_CANAIS
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: curl-portal-rodape-e-menu-adicional
+    label: "Canais no site: Televendas 0800 607 1000, Pedido Eletrônico 0800 607 6000, SAC 0800 607 8000, WhatsApp (27) 3182-1500, portal Millcompras e app."
+    narrative: "Endereço no rodapé: Rua Basílio da Gama, 56, Jardim Limoeiro, Serra/ES. Redes: Facebook, Instagram e YouTube (grupogmill) e LinkedIn (grupo-gmill). Menu adicional (imagem com mapa de cliques): download do Pedido Eletrônico (instalador 'ServCli Millenium' .exe, hospedado em servconpe.com.br), Compre agora, 2ª via de boleto em 5 bancos (BB, Itaú, Bradesco, Santander, HSBC) e dois Google Forms: 'Atualize seu cadastro' e 'Solicitação de cadastro'."
+    provenance:
+      source: "https://gmill.com.br/portal/ e https://gmill.com.br/images/portal/HTML/menuadicional-semimagem.html"
+      locator: "rodapé, ícones sociais e <map name=map-menuadicional>"
+      method: "leitura: curl das páginas em 2026-10-21"
+      locality: web
+
+  - id: E_PAGE_SAC_E_CADASTRO
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 3
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: curl-contato-e-pre-cadastro
+    label: "SAC é um formulário (nome, e-mail, telefones, mensagem, captcha) com um único setor: Central de Relacionamento (CRM). O cadastro de cliente começa só pelo CNPJ."
+    narrative: "'Quero ser Gmill' aponta para talentos.gmill.com.br, que redireciona para o Portal de Talentos da Senior (vagas). A página Eventos (?p=eventos) devolve erro 400 ('plain HTTP request sent to HTTPS port')."
+    provenance:
+      source: "https://gmill.com.br/portal/?p=contato, ?p=pre_cadastro, ?p=eventos e https://talentos.gmill.com.br"
+      locator: "formulários das páginas; resposta HTTP de Eventos; redirecionamento de talentos"
+      method: "leitura: curl das páginas em 2026-10-21"
+      locality: web
+
+  # ── O que o site sustenta ────────────────────────────────────────────────────────────────────
+  - id: C_SITE_E_O_PORTAL_B2B
+    node_type: claim
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.9
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_HOME-e-EN_SITE
+    label: "O site da GMill é o portal de vendas, não um site institucional: o público é a farmácia cliente cadastrada, e tudo leva ao pedido."
+    narrative: "Consequência para o business-context: o site confirma o canal B2B (S1), mas quase não fala de produto, cobertura ou serviços em texto. A vitrine é imagem e o catálogo fica atrás do login."
+    provenance:
+      source: "E_PAGE_HOME, EN_SITE"
+      locator: "menu, banners e aviso de acesso"
+      method: "derivado: leitura das evidências deste grafo"
+
+  - id: C_DUAS_IDENTIDADES_NO_SITE
+    node_type: claim
+    plane: PROD
+    status: confirmed
+    impact: 5
+    confidence: 0.9
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_GRUPO_GMILL-vs-E_PAGE_MILLENIUM
+    label: "O site publica DUAS identidades com missão, visão e valores diferentes: a nova da Gmill Distribuição ('cuidar de cada vida') e a antiga da Millenium ('genéricos e similares até 2024')."
+    narrative: "A visão da Millenium venceu em 2024 e continua no ar. A nova amplia o escopo de 'varejo farmacêutico' para 'ecossistema de saúde'. Para um Company Brain, a identidade vigente precisa ser marcada, e a outra, arquivada como histórica."
+    provenance:
+      source: "E_PAGE_GRUPO_GMILL, E_PAGE_MILLENIUM"
+      locator: "blocos Missão, Visão e Valores das duas páginas"
+      method: "derivado: comparação das duas páginas"
+
+  - id: C_NUMEROS_DO_SITE_SAO_DECLARACAO
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.6
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_MILLENIUM-sem-data
+    label: "Os números da página Millenium (250 internos, 130+ representantes, 5.000 clientes, 60 indústrias, 6.000 m²) são declaração sem data, provavelmente anterior a 2024 [INFERIDO]."
+    narrative: "O business-context registra 201-500 colaboradores (LinkedIn) e 500-600 (fontes de 2022). Os 250 internos do site são compatíveis com a faixa do LinkedIn se não contarem representantes [INFERIDO]. Não usar como número vigente sem confirmação da GMill."
+    provenance:
+      source: "E_PAGE_MILLENIUM e docs/business-context/index.md (linha Porte)"
+      locator: "parágrafo de abertura da página Millenium; tabela de identidade do business-context"
+      method: "derivado: comparação com o business-context"
+
+  - id: C_CANAIS_DE_PEDIDO_MULTIPLOS
+    node_type: claim
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.85
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_CANAIS-e-E_PAGE_MILLENIUM
+    label: "O pedido entra por pelo menos seis canais: representante (internet móvel), televendas, pedido eletrônico (app desktop ServCli), portal Millcompras, app e WhatsApp."
+    narrative: "É contexto direto para o MeuGmill Vendas: a carteira de clientes organiza o atendimento dos representantes, que são um desses canais."
+    provenance:
+      source: "E_PAGE_CANAIS, E_PAGE_MILLENIUM"
+      locator: "rodapé, menu adicional e texto da Millenium"
+      method: "derivado: leitura das evidências deste grafo"
+
+  - id: C_ACESSO_EXIGE_DOCUMENTACAO
+    node_type: claim
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.85
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_HOME-e-E_PAGE_SAC_E_CADASTRO
+    label: "Comprar exige cadastro por CNPJ e documentação regulatória em dia: preço e condição só aparecem para o cliente habilitado."
+    narrative: "Coerente com o escopo regulatório do hub (AFE/AE ANVISA). Quais documentos são exigidos o site não diz [TO BE COMPLETED]."
+    provenance:
+      source: "E_PAGE_HOME, E_PAGE_SAC_E_CADASTRO"
+      locator: "aviso do modal de login; formulário de pré-cadastro"
+      method: "leitura: das evidências deste grafo"
+
+  # ── Lacunas e defeitos ───────────────────────────────────────────────────────────────────────
+  - id: Q_CONTEUDO_SO_EM_IMAGEM
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 3
+    confidence: 0.8
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_HOME-e-E_PAGE_CANAIS
+    label: "Banners, vitrines e o menu adicional são só imagem: nem busca nem IA leem o que está em oferta. Existe a mesma informação em texto ou dado em algum lugar?"
+    narrative: "Também há alt trocado: os dois Google Forms de cadastro estão com alt 'Segunda via de boleto'."
+    provenance:
+      source: "E_PAGE_HOME, E_PAGE_CANAIS"
+      locator: "tags img e area do portal"
+      method: "leitura: das evidências deste grafo"
+
+  - id: Q_ITENS_DESATUALIZADOS
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 3
+    confidence: 0.75
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_SAC_E_CADASTRO-e-E_PAGE_CANAIS
+    label: "Itens do site que parecem quebrados ou vencidos: Eventos dá erro 400, a visão Millenium venceu em 2024 e a 2ª via ainda lista o HSBC [INFERIDO: a operação no Brasil foi vendida em 2016]."
+    narrative: "O instalador do Pedido Eletrônico também tem link em http (sem s) no código da página. Vale a GMill revisar; não é urgência."
+    provenance:
+      source: "E_PAGE_SAC_E_CADASTRO, E_PAGE_CANAIS, E_PAGE_MILLENIUM"
+      locator: "resposta de ?p=eventos; links do menu adicional; visão da Millenium"
+      method: "leitura: das evidências deste grafo"
+
+  - id: Q_RELATORIOS_TRANSPARENCIA
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 2
+    confidence: 0.7
+    verified_at: "2026-10-21"
+    verified_against: E_PAGE_GRUPO_GMILL
+    label: "A página Grupo Gmill promete relatórios semestrais de transparência salarial, mas não há link para eles no site. Onde ficam?"
+    provenance:
+      source: "E_PAGE_GRUPO_GMILL"
+      locator: "valor 'Transparência nas relações trabalhistas'"
+      method: "leitura: da página"
+
+  # ── Sugestões ────────────────────────────────────────────────────────────────────────────────
+  - id: D_USO_DO_SITE_NO_CONTEXTO
+    node_type: decision
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.65
+    verified_at: "2026-10-21"
+    verified_against: proposta-em-sessao-nao-decidida-pelo-maestro
+    label: "SUGESTÃO (não decidida): levar ao business-context a identidade vigente e os canais de pedido, e perguntar à GMill qual identidade e quais números valem."
+    narrative: "(1) Registrar missão, visão e valores da Gmill Distribuição como vigentes, e os da Millenium como históricos, após confirmação. (2) Os seis canais de pedido entram em 04-operations/sales-process.md. (3) Os números da Millenium só entram como declaração datada. (4) Serve de exemplo vivo na aula de Company Brain: o próprio site guarda duas verdades, e um Brain precisa dizer qual vale."
+    provenance:
+      source: "C_* deste grafo"
+      locator: "identidades, canais e números"
+      method: "derivado: proposta da sessão a partir das afirmações"
+
+edges:
+  - from: E_PAGE_HOME
+    to: EN_SITE
+    edge_type: TRACES_TO
+  - from: E_PAGE_GRUPO_GMILL
+    to: EN_SITE
+    edge_type: TRACES_TO
+  - from: E_PAGE_MILLENIUM
+    to: EN_SITE
+    edge_type: TRACES_TO
+  - from: E_PAGE_CANAIS
+    to: EN_SITE
+    edge_type: TRACES_TO
+  - from: E_PAGE_SAC_E_CADASTRO
+    to: EN_SITE
+    edge_type: TRACES_TO
+
+  - from: E_PAGE_HOME
+    to: C_SITE_E_O_PORTAL_B2B
+    edge_type: SUPPORTS
+  - from: E_PAGE_GRUPO_GMILL
+    to: C_DUAS_IDENTIDADES_NO_SITE
+    edge_type: SUPPORTS
+  - from: E_PAGE_MILLENIUM
+    to: C_DUAS_IDENTIDADES_NO_SITE
+    edge_type: SUPPORTS
+  - from: E_PAGE_MILLENIUM
+    to: C_NUMEROS_DO_SITE_SAO_DECLARACAO
+    edge_type: SUPPORTS
+  - from: E_PAGE_CANAIS
+    to: C_CANAIS_DE_PEDIDO_MULTIPLOS
+    edge_type: SUPPORTS
+  - from: E_PAGE_MILLENIUM
+    to: C_CANAIS_DE_PEDIDO_MULTIPLOS
+    edge_type: SUPPORTS
+  - from: E_PAGE_HOME
+    to: C_ACESSO_EXIGE_DOCUMENTACAO
+    edge_type: SUPPORTS
+  - from: E_PAGE_SAC_E_CADASTRO
+    to: C_ACESSO_EXIGE_DOCUMENTACAO
+    edge_type: SUPPORTS
+
+  - from: E_PAGE_HOME
+    to: Q_CONTEUDO_SO_EM_IMAGEM
+    edge_type: SUPPORTS
+  - from: E_PAGE_CANAIS
+    to: Q_CONTEUDO_SO_EM_IMAGEM
+    edge_type: SUPPORTS
+  - from: E_PAGE_SAC_E_CADASTRO
+    to: Q_ITENS_DESATUALIZADOS
+    edge_type: SUPPORTS
+  - from: C_DUAS_IDENTIDADES_NO_SITE
+    to: Q_ITENS_DESATUALIZADOS
+    edge_type: SUPPORTS
+  - from: E_PAGE_GRUPO_GMILL
+    to: Q_RELATORIOS_TRANSPARENCIA
+    edge_type: SUPPORTS
+
+  - from: D_USO_DO_SITE_NO_CONTEXTO
+    to: C_DUAS_IDENTIDADES_NO_SITE
+    edge_type: DEPENDS_ON
+  - from: D_USO_DO_SITE_NO_CONTEXTO
+    to: C_CANAIS_DE_PEDIDO_MULTIPLOS
+    edge_type: DEPENDS_ON
+  - from: D_USO_DO_SITE_NO_CONTEXTO
+    to: C_NUMEROS_DO_SITE_SAO_DECLARACAO
+    edge_type: DEPENDS_ON
+  - from: D_USO_DO_SITE_NO_CONTEXTO
+    to: C_SITE_E_O_PORTAL_B2B
+    edge_type: DEPENDS_ON
