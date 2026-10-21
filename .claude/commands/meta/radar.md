@@ -32,7 +32,13 @@ introspecção e **zero percepção externa recorrente** (S9 parada desde 07-06)
 - **Maestro-invocado** (W7 = MOAT): nenhum cron/loop/auto-start. A detecção de idade é da
   REGRA 65 (lint, SOFT por eixo vencido — default 45 dias) — a máquina detecta, o humano roda.
 - **Juiz-fixo por eixo** (`opus/high`, mandato REFUTAR, ABRE as fontes): calibrado no programa
-  (13/47 findings reprovados por fonte fabricada — sem juiz, entrariam na síntese).
+  (13/47 findings reprovados por fonte fabricada — sem juiz, entrariam na síntese). Reprovar exige
+  **critério pré-registrado + superação** (SAC-151): os critérios do eixo entram no prompt do juiz
+  ANTES dele rodar, todo finding reprovado devolve `criterio: {id, comando}` e `superacao: {classe,
+  achada, o_que, medida}` (a fonte, variante ou caminho que entregaria o que o finding prometia), e a sessão
+  roda `bash .claude/validation/judge-verdict-check.sh <vereditos.json>` antes da síntese: rc 1 =
+  reprovação recusada, contada, e o finding fica não-julgado. Superação achada vira nó
+  `C_SUPERACAO_<AAAAMMDD>_…` com `TRACES_TO` à reprovação.
 - **write(KG) por rodada**: grafo próprio `docs/evolution/research/radar-<eixo|all>-<data>/`,
   reconciliando o que a rodada derrubar da **baseline anterior do eixo** (Aufhebung) — e são
   **três** desfechos, não um. Cobrado pela **REGRA 89 (Rodada de radar selada reconcilia o corpus
@@ -49,7 +55,7 @@ introspecção e **zero percepção externa recorrente** (S9 parada desde 07-06)
      (`integrity.dangling-external`, contra todos os `.kg.yaml` rastreados): alvo inventado reprova.
      Até a v4.2 a aresta do motor era INTRA-ARQUIVO, e a forma era a chave própria
      `meta.x_supersedes_external`, que **não conta mais** na REGRA 89 (não se conferia o alvo);
-     o corpus foi migrado por `kg-migrate-v3.py --external-edges`;
+     o corpus foi migrado por `kg-migrate-v3.py --external-edges` (core-only);
   3. `meta.x_supersedes_none: <razão>`, quando a rodada genuinamente não derrubou nada — desfecho de
      1ª classe. **Forçar `SUPERSEDES` inventado é pior que a dívida**, e a razão tem de dizer
      contra QUAL baseline se mediu (a do eixo, não um corpus qualquer). Exige **valor**: campo vazio

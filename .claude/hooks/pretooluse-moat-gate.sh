@@ -22,7 +22,8 @@
 #            escrita em /etc/cron*, /var/spool/cron ou num .timer.
 # O juiz mora em lib/moat-judge.py e roda DENTRO do tokenizador de lib/invocation-lines.sh (linhas de
 # invocação: heredoc inerte, echo e prosa que CITAM o alvo não vetam; `bash -c`, `sudo -u`, `$(…)`,
-# variável literal, `cd`, symlink e script fora do projeto são seguidos).
+# variável literal, `cd`, symlink, script fora do projeto e função definida na própria string — a chamada é
+# emulada com os argumentos dela, SAC-148 — são seguidos).
 #
 # ── O QUE NÃO VETA (fronteira declarada) ─────────────────────────────────────────────────────────────────
 #  · Wrapper versionado: `bash ops/update-kg-writer.sh` (core-only) passa — script RASTREADO pelo git deste
@@ -67,6 +68,16 @@ signal=$(
         END { flush() }' "$members" \
       | while IFS= read -r m; do printf '%s\n' "$m" "${m##*/}"; done
     printf '%s\n' crontab systemd-run '.timer' /etc/cron /var/spool/cron
+    # o modo de teste do wrapper de convites: só a bancada o liga; na linha de comando, o juiz fecha
+    printf '%s\n' ONION_A2A_LIVE_TEST
+    # idem para o modo de teste do wrapper da fila A2A (ops/a2a-queue-live.sh) (core-only)
+    printf '%s\n' ONION_A2A_QUEUE_TEST
+    # e do wrapper do drop-in de integridade do bridge (ops/bridge-hardening.sh) (core-only)
+    printf '%s\n' ONION_BRIDGE_HARDENING_TEST
+    # e do wrapper do runner do convidado (ops/chat-runner.sh) (core-only)
+    printf '%s\n' ONION_CHAT_RUNNER_TEST
+    # e do wrapper do STT em lote (ops/stt-service.sh) (core-only)
+    printf '%s\n' ONION_STT_SERVICE_TEST
   } | grep -v '^$' | sed 's/[][\.*^$+?(){}|/]/\\&/g' | sort -u | paste -sd'|' -)
 moat_action='(^|[^[:alnum:]_-])(systemctl|service|docker|rsync|cp|mv|install|tee|ln|rm|mkdir|touch|chmod|chown|dd|tar|unzip|crontab|systemd-run|at|batch|git|eval|xargs|sed|curl|wget)([^[:alnum:]_-]|$)|>'
 # rota dinâmica: SÓ os programas cujo alvo é um NOME (unidade, container, crontab) ou que tornam o texto opaco
