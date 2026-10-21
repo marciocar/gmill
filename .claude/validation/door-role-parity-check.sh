@@ -135,12 +135,30 @@ while IFS=$'\x1f' read -r mid role path kind; do
     # members-validate.sh, não desta guarda.
     [ -n "${role}" ] || continue
     if [ -z "${path}" ] || [ ! -d "${path}" ]; then adopter_unreadable=$((adopter_unreadable + 1)); continue; fi
-    if [ ! -f "${path}/.claude/.onion-version" ]; then
-      echo "REGRA 92: [adotante/CARIMBO-AUSENTE] adotante '${mid}' tem clone em ${path} mas NENHUM \`.claude/.onion-version\` — o registro diz que ele vendoriza o Onion e o clone não confirma; o clone está em outro checkout, desacoplou, ou o \`local_path\` envelheceu"
+    # O CARIMBO É O DA INTEGRAÇÃO, não o da branch em que o clone está (2026-10-19, medido num adotante real):
+    # o clone da equipe estava numa branch de trabalho sem `.claude/` rastreado, e a guarda acusava
+    # CARIMBO-AUSENTE num membro vivo e adotado (o carimbo estava na `develop`, igual ao registro). A
+    # árvore de trabalho segue sendo a 1ª fonte; sem ela, lê-se o carimbo da branch de integração
+    # (resolve-integration-branch.sh, local ou origin/). Ausente nas duas = CARIMBO-AUSENTE, como antes.
+    _stc=""; _stsrc=""
+    if [ -f "${path}/.claude/.onion-version" ]; then
+      _stc="$(cat "${path}/.claude/.onion-version")"; _stsrc="árvore de trabalho"
+    elif [ -d "${path}/.git" ] || git -C "${path}" rev-parse --git-dir >/dev/null 2>&1; then
+      _ib="$(bash "$(dirname "${BASH_SOURCE[0]}")/resolve-integration-branch.sh" "${path}" 2>/dev/null || true)"
+      for _ref in "${_ib}" "origin/${_ib}"; do
+        [ -n "${_ib}" ] || break
+        if _stc="$(git -C "${path}" show "${_ref}:.claude/.onion-version" 2>/dev/null)" && [ -n "${_stc}" ]; then
+          _stsrc="branch de integração ${_ref}"; break
+        fi
+        _stc=""
+      done
+    fi
+    if [ -z "${_stc}" ]; then
+      echo "REGRA 92: [adotante/CARIMBO-AUSENTE] adotante '${mid}' tem clone em ${path} mas NENHUM \`.claude/.onion-version\` — nem na árvore de trabalho nem na branch de integração; o registro diz que ele vendoriza o Onion e o clone não confirma (desacoplou, ou o \`local_path\` envelheceu)"
       found=1; continue
     fi
-    astamp="$(_norm_role "$(grep -m1 -E '^[[:space:]]*role:' "${path}/.claude/.onion-version" | sed 's/^[[:space:]]*role:[[:space:]]*//')")"
-    if grep -qE '^[[:space:]]*kind:[[:space:]]*["'"'"']?door' "${path}/.claude/.onion-version"; then
+    astamp="$(_norm_role "$(grep -m1 -E '^[[:space:]]*role:' <<< "${_stc}" | sed 's/^[[:space:]]*role:[[:space:]]*//')")"
+    if grep -qE '^[[:space:]]*kind:[[:space:]]*["'"'"']?door' <<< "${_stc}"; then
       echo "REGRA 92: [adotante/CARIMBO-DE-PORTA] adotante '${mid}': o carimbo em ${path} traz \`kind: door\`, e é esse campo que liga o MODO PORTA no lint — o registro diz adotante e o carimbo diz porta. Só o materializador das portas escreve \`kind: door\`; num adotante ele é engano ou fuga, e o re-carimbo é ato da sessão DELE (\`/meta:adopt --update\`)"
       found=1; continue
     fi
@@ -176,7 +194,7 @@ while IFS=$'\x1f' read -r mid role path kind; do
   #   Se uma dessas portas tiver `.onion-version`, NENHUM ramo especial vale: compara como as outras.
   #   TETO DECLARADO: para `plugins` esta guarda mede só a PRESENÇA da proveniência (a forma), não
   #   compara o `ref` com o `onion_version` do registro — isso é pin, e o pin é da REGRA 85 e do
-  #   `/meta:publish` (F3). Papel e pin são perguntas diferentes; misturá-las aqui criaria um 2º dono.
+  #   `/meta:publish` (core-only; F3). Papel e pin são perguntas diferentes; misturá-las aqui criaria um 2º dono.
   if [ ! -f "${path}/.claude/.onion-version" ]; then
     if [ "${role}" = "plugins" ]; then
       if compgen -G "${path}/plugins/*/.claude-plugin/provenance.json" >/dev/null; then continue; fi
@@ -225,7 +243,7 @@ if [ "${adopter_unreadable}" -gt 0 ]; then
   echo "door-role-parity: ${adopter_unreadable} adotante(s) com clone INALCANÇÁVEL — compatibilidade registro×carimbo NÃO MEDIDA neles." >&2
 fi
 if [ "${mini_pending}" -gt 0 ]; then
-  echo "door-role-parity: ${mini_pending} porta(s) \`mini\` ainda sem carimbo (a 1ª publicação por allowlist é do maestro: /meta:publish onion-mini --replace-foreign) — paridade NÃO MEDIDA nelas." >&2
+  echo "door-role-parity: ${mini_pending} porta(s) \`mini\` ainda sem carimbo (a 1ª publicação por allowlist é do maestro, na fonte: /meta:publish onion-mini --replace-foreign (core-only)) — paridade NÃO MEDIDA nelas." >&2
 fi
 if [ "${unreadable}" -gt 0 ]; then
   echo "door-role-parity: ${unreadable} porta(s) com clone INALCANÇÁVEL (sem local_path, ou diretório ausente) — paridade NÃO MEDIDA nelas. É o caso esperado no CI, onde o clone não existe; medir exigiria rede e credencial dentro do lint." >&2

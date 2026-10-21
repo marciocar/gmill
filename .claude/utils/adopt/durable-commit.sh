@@ -54,12 +54,34 @@ git -C "${DEST}" rev-parse --verify "${BR}" >/dev/null 2>&1 \
 # acrescenta os ARTEFATOS GERADOS na adoção, que não viajam do core: CLAUDE.md, docs/onion, os três
 # contextos de domínio, .githooks. Propósitos diferentes — a SSOT diz o que COPIA, esta diz o que se
 # COMMITA no alvo. Unificá-las quebraria a durabilidade dos gerados.
-ONION_PATHS=(.claude docs/meta-specs docs/knowledge-base docs/sdaal docs/evolution \
+# ⚠️ `vendor/kg-ssot` entra pelo mesmo motivo do manifesto (SAC-149, 2026-10-15): o leitor do contrato do
+# .kg.yaml passou a viajar, e sem ele nesta lista a ADOÇÃO nova o deixava UNTRACKED — o disco do maestro
+# julgava o grafo e o clone do time saía rc 2. Medido pela família `adopter_shape` (ela roda num CLONE).
+ONION_PATHS=(.claude docs/meta-specs docs/knowledge-base docs/sdaal docs/evolution vendor/kg-ssot \
              docs/onion docs/business-context docs/technical-context docs/compliance-context \
              CLAUDE.md CLAUDE.onion.md .gitattributes .prettierignore .githooks .env.example.onion \
              LICENSE-ONION LICENSE-ONION-DOCS)
 add=(); for p in "${ONION_PATHS[@]}"; do [ -e "${DEST}/${p}" ] && add+=("${p}"); done
 [ "${#add[@]}" -gt 0 ] && git -C "${DEST}" add -- "${add[@]}" 2>/dev/null
+# O CONTRATO DO .kg.yaml ATRAVESSA `vendor/` IGNORADO (passada adversarial, 2026-10-15): repo PHP/Composer (e
+# alguns Go) ignora `vendor/`, e o `git add` acima pula o caminho ignorado EM SILÊNCIO (o rc 1 morre no 2>/dev/null)
+# — medido com este helper: rc 0, "instalação commitada", 0 arquivos de vendor/kg-ssot rastreados. O --update já
+# força pela lista exigida; a adoção nova não forçava. Teto declarado: um vendor/kg-ssot PRÓPRIO do alvo e
+# ignorado de propósito também seria forçado (nenhum adotante medido assim; os dois com vendor próprio o rastreiam).
+if [ -d "${DEST}/vendor/kg-ssot" ] && git -C "${DEST}" check-ignore -q vendor/kg-ssot/LICENSE 2>/dev/null; then
+  git -C "${DEST}" add -f -- vendor/kg-ssot 2>/dev/null \
+    || echo "⚠️  vendor/kg-ssot está ignorado pelo .gitignore do alvo e o git add -f falhou — o clone do time fica sem o contrato do .kg.yaml." >&2
+fi
+# `.gitignore` NÃO RASTREADO (SAC-149, 2026-10-15, medido pela família `adopter_shape` num greenfield sem
+# .gitignore): o `ensure-secret-gitignore.sh` o cria com os padrões de segredo, e sem este passo ele ficava
+# UNTRACKED — o disco do maestro protegia o `.env`, o clone do time não. Entra quando NÃO está no HEAD nem no
+# índice. Tetos declarados (passada adversarial): um .gitignore local que o usuário nunca commitou entra INTEIRO,
+# com as linhas dele (aparece no diff do PR da adoção); e o .gitignore JÁ RASTREADO fica de fora, então as linhas
+# de segredo que a adoção acrescentou a ele ficam só no disco até o dono commitá-las.
+if [ -f "${DEST}/.gitignore" ] && ! git -C "${DEST}" cat-file -e HEAD:.gitignore 2>/dev/null \
+   && [ -z "$(git -C "${DEST}" ls-files -- .gitignore 2>/dev/null)" ]; then
+  git -C "${DEST}" add -- .gitignore 2>/dev/null
+fi
 
 # ── PROJEÇÕES QUE CONTAM O ÍNDICE só existem DEPOIS do add (adoção greenfield, 2026-10-13) ─────────
 # `testing-inventory.md` (REGRA 80) e `testing-state.md` (REGRA 81) contam `git ls-files`. No greenfield

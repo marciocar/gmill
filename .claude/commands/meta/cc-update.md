@@ -36,6 +36,9 @@ CI. Forjado pelo `/meta:forge` no mesmo dia; decisão e evidência em
 
 - **Core-only.** Maestro-invocado; o gatilho é o aviso de drift de versão (REGRA 65 (Radar de mundo
   com baseline DATADA por eixo) e o hook de drift da sessão).
+- **O medidor viaja com a meta-fábrica, a configuração de produção não.** Os alvos do CLI embutido em
+  Agent SDK vêm de `CC_DELTA_SDK_TARGETS` ou, no core, de `ops/cc-sdk-targets.tsv` (core-only); quem
+  não tem nenhum dos dois lê "nenhum alvo declarado" na tabela de versões, nunca um erro.
 - **Vai até o PR mergeado** (decisão do maestro, 2026-10-08), pelo caminho verificado.
 - **Não implementa ações.** Cada ação proposta vira nó + issue (passo 8).
 
@@ -58,7 +61,9 @@ ele **não** diz que um item toca o Onion.
 
 1. **VEREDITO.** `NADA A MEDIR` → diga a versão medida e **pare**. Linha de erro do medidor (rc 2) →
    declare a lacuna e pare; nunca reconstrua o delta de memória. Aviso de processo ≠ disco → peça o
-   restart antes de medir capacidade nova.
+   restart antes de medir capacidade nova. Aviso de **CLI do SDK atrás do host** → o delta não chega a
+   quem serve por aquele SDK: a rodada o registra (e, em `NADA A MEDIR`, você o informa antes de parar);
+   **SDK NÃO MEDIDO** → declare a lacuna de produção, nunca a preencha de memória.
 2. **ESQUELETO.** Rode o medidor de novo com `--write` apontando para o diretório da próxima rodada
    que ele mesmo imprimiu (derivado do `kg:` do eixo E3). Saem `data/<versão>.txt` (cópia byte a byte
    do CHANGELOG) e o `.kg.yaml` com 2 nós. Confirme: `.claude/validation/kg-radar.sh <grafo> --integrity --schema` e
@@ -71,6 +76,13 @@ ele **não** diz que um item toca o Onion.
    oficial (URL no nó `E_DELTA_DA_RODADA`), medir cada ligação no vivo, julgar cada nó em
    SUSTENTA · EXAGERA · REPROVA e **listar o que a rodada deixou de ver**. Ele julga também a
    superação: `external_edges` SUPERSEDES (nomeando o nó superado) ou `x_supersedes_none` (com razão).
+   **Critério pré-registrado e superação (SAC-151):** antes de lançar o juiz, grave em
+   `data/judge-verdicts.json` os critérios (`criteria: [{id, when, check}]`, ex. `CU1_CITACAO_DIVERGE`
+   com `diff <(curl -s <changelog>) data/<versão>.txt`); o juiz devolve `verdicts: [{alvo, veredito,
+   criterio: {id, comando}, superacao: {classe, achada, o_que, medida}}]`, e todo EXAGERA/REPROVA leva as duas
+   metades. Rode `bash .claude/validation/judge-verdict-check.sh data/judge-verdicts.json`: rc 1 =
+   reprovação RECUSADA (o nó fica como estava, não-julgado, e volta ao juiz); cada `SUPERACAO` impressa
+   vira nó `C_SUPERACAO_<AAAAMMDD>_…` com aresta `TRACES_TO` ao nó reprovado.
 5. **APLICAR.** Reprovado → corrigido ou rebaixado (impacto 1); exagerado → reescrito; omissão de
    impacto alto → nó novo. Grave a decisão de superação: `external_edges` SUPERSEDES no topo (contrato
    v4.3; o gate confere o alvo) ou `meta.x_supersedes_none` com o prefixo `x_` — a forma sem prefixo
@@ -89,7 +101,7 @@ ele **não** diz que um item toca o Onion.
    executável ainda é prosa (SAC-65). Provider diferente de `linear` ou chave ausente → avise em pt-BR,
    sugira `/meta:setup-integration` e deixe só o nó.
 9. **FECHAR.** Regenere as projeções (o plugin onion não se regenera mais no core desde a F4 das
-   portas: ele nasce na publicação, `/meta:publish onion-plugins`); `bash ops/pr-finalize.sh --push`; PR com corpo em pt-BR; merge **só** por
+   portas: ele nasce na publicação, `/meta:publish onion-plugins` (core-only)); `bash ops/pr-finalize.sh --push`; PR com corpo em pt-BR; merge **só** por
    `ops/pr-merge-verified.sh`, com a dispensa nomeada quando o revisor do CI estiver sem crédito.
 10. **RELATAR.** Versão medida (baseline → instalada), quantos nós, o veredito do juiz, as issues
     criadas, o PR e o merge.

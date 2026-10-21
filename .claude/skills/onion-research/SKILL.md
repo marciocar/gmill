@@ -45,6 +45,12 @@ A doutrina inteira: `.claude/commands/common/prompts/research-doctrine.md` (10 c
    **mercado obrigatória**) → **write(KG)** (o agente escreve o grafo; um **verificador separado**, que não
    escreveu, roda o radar e o contrato, e o laço de correção é contado no motor, até 3 tentativas;
    sem radar 0 pelo verificador o run devolve erro, e `writeAttempts` mostra o declarado contra o medido).
+   **Todo juiz que reprova aponta o que supera** (SAC-151): refutação, objeção sobrevivente e rejeição na
+   ancoragem carregam `superacao {classe, achada, o_que, medida}` e citam um critério pré-registrado com o comando
+   que o checa. Os critérios default de cada juiz estão no workflow; passe `rejectionCriteria: { verify,
+   elenxo, anchor }` (listas de `{id, when, check}`) para pré-registrar os da pergunta. Negativo sem as duas
+   metades é recusado pelo motor e contado em `overcoming`. Superação achada vira nó `C_SUPERACAO_<data>_…`,
+   e o verificador reprova o grafo que tiver menos nós desses do que superações achadas.
 5. **Depois do run** (o que o workflow não faz): `SYNTHESIS.md` como PROJEÇÃO do grafo com o contrato de
    custo no frontmatter (`kg:`, `run_id`, `tokens`, `agents`, `duration_min`) e as seções **NÃO-VERIFICADOS**
    (do retorno: `unverified`, `refuted` por fonte fraca, `notVerifiedByBudget`, `budgetDropped`) e
@@ -59,7 +65,9 @@ A doutrina inteira: `.claude/commands/common/prompts/research-doctrine.md` (10 c
    nos `args`. O workflow ganha a fase **Elenxo** (refutador opus/high, default REPROVADO): refuta cada achado **e**
    interroga cada descarte — *"por evidência ou por comodismo/hype/orçamento?"*; o descarte por comodismo volta
    como objeção sobrevivente. O `write(KG)` escreve **1 nó `decision` OPEN** (opções nomeadas + recomendação)
-   com `CONSTRAINS` das objeções sobreviventes. **Você nunca sela**: informe ao maestro o id do nó `D_` e a
+   com `CONSTRAINS` das objeções sobreviventes. A recomendação do Elenxo (e o mercado do sintetizador) chega
+   **inteira** ao escritor: é texto de agente, e o teto de 600 caracteres vale só para o dado web
+   (em 2026-10-21, o run `wf_1b66acda-ac8` entregou 600 de 2786 caracteres). **Você nunca sela**: informe ao maestro o id do nó `D_` e a
    tabela de selagem do `/meta:drive` (KIND decision). O retorno traz `decision: {options, objections,
    recommendation}`.
 

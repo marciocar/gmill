@@ -31,7 +31,7 @@ São as regras que o gate mecânico do Onion aplica a **todo repo da rede**: o m
 lint roda no core e em cada adotante. **HARD** bloqueia o merge; **SOFT** avisa, mas não
 bloqueia o CI.
 
-**98 regras** no total — **86 HARD**, **38 SOFT**.
+**102 regras** no total — **90 HARD**, **42 SOFT**.
 
 ## Frontmatter & conformidade de artefato
 
@@ -66,6 +66,7 @@ Tamanho saudável, nomes kebab-case, dialeto puro e links que resolvem.
 | 74 | Caminho .claude/ NU dentro de plugin só resolve no core, com catraca | HARD + SOFT | baseline de passivo crescendo calado — um PR transformava ref NOVA (HARD) em PASSIVO (SOFT) acrescentando linha |
 | 94 | MUTANTE esquecido na árvore | HARD + SOFT | teste de mutação que morre no meio e deixa o repo PIOR que antes |
 | 98 | Diretiva de injeção escrita como CITAÇÃO não pode estar VIVA | HARD | exemplo de documentação que o harness lê como diretiva e EXECUTA a cada invocação do comando. |
+| 109 | CLAUDE.md não cresce sem tirar o equivalente ou citar um nó | HARD + SOFT | o arquivo que carrega em TODA sessão e compactação engordar sem ninguém decidir |
 
 ## Fronteiras & contratos de arquitetura
 
@@ -90,6 +91,7 @@ O consumidor fala com a abstração, nunca com o provider direto.
 | 103 | Adapter do task-manager declara todas as capacidades da interface, com fonte | HARD | capacidade declarada que o adapter não exerce, e célula "medida" sem fonte nenhuma. |
 | 104 | Executável do adapter e declaração de capacidades listam os mesmos verbos | HARD | executável do task-manager que exerce verbo declarado not_implemented (ou não declarado), e medição adapter: que nenhum executável roda. |
 | 105 | Script rastreado não chama a API do provedor de task manager por fora do adapter | HARD | o cliente do provedor reescrito fora do adapter (o script avulso da sessão promovido a ops/), que contorna o tm.sh e a declaração de capacidades. |
+| 107 | Adapter SDAAL declara onde o seu contrato é cobrado | HARD + SOFT | adapter em prosa cujo contrato só vale se a sessão lembrar — nenhum executável, hook ou validador o cobra. |
 
 ## SSOT anti-drift
 
@@ -119,6 +121,8 @@ Toda superfície DERIVADA fica em sincronia com a fonte única — contagens, ma
 | 90 | Prosa de comando conhece os papéis que o script aceita | SOFT | o par script×prosa dos comandos de co-evolução desencontrar — e ele JÁ desencontrou duas |
 | 92 | Papel da porta no registro concorda com o CARIMBO dela | HARD + SOFT | o materializador ler o papel ERRADO e cortar maquinaria da porta pública |
 | 96 | Diretiva de contexto INJETADO não corta listagem em silêncio | HARD | a projeção que o harness injeta é lida pela sessão COMO SE FOSSE o conjunto — não há |
+| 108 | Pin do grafo de adoção concorda com o carimbo | HARD + SOFT | o grafo que o warm-up manda ler PRIMEIRO mentir sobre a versão do Onion instalada |
+| 110 | Índice da KB conta o que o disco tem | HARD + SOFT | o índice de docs/knowledge-base declarar uma contagem e listar outra, com arquivos fora dele |
 
 ## KG & proveniência
 
@@ -207,3 +211,14 @@ As demais categorias perguntam 'achei violação?'. Esta pergunta 'eu cheguei a 
 | 86 | Workflow de CI PARSEIA como YAML | HARD | workflow inexecutável passando por existente, e guarda morta por sintaxe |
 | 88 | Job de workflow que EXECUTA arquivo do repo faz checkout | HARD + SOFT | job sem `actions/checkout` invocando script versionado; o bash sai 127 e o `rc != 0` |
 | 101 | Veto PreToolUse por exit 2 declara onFailure: block | HARD + SOFT | veto que falha ABERTO quando o hook nem roda (script ausente sai 127 e a ação passa). |
+
+## Aplicabilidade por papel
+
+Regras cujo objeto só existe em alguns papéis, declaradas por `# aplica-se:` no docstring. Fora desses
+papéis o lint **não as roda** e as conta à parte (`Não se aplica`), fora de HARD e SOFT: ausência
+legítima de objeto não é aviso. Toda lista contém `source`, então no core todas rodam.
+
+| Nº | Regra | Aplica-se a |
+|---:|-------|-------------|
+| 85 | Porta pública espelha o core, com catraca | source |
+| 92 | Papel da porta no registro concorda com o CARIMBO dela | source |
