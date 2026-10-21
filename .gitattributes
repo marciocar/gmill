@@ -1,2 +1,9 @@
 docs/evolution/**/CHANGELOG.md merge=union
 docs/evolution/**/_processed/** merge=union
+# EOL fixado em LF nos executáveis (Onion, SAC-107): checkout Windows com autocrlf quebraria o bash.
+*.sh text eol=lf
+*.awk text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+.githooks/* text eol=lf
