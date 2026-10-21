@@ -1,0 +1,425 @@
+meta:
+  id: diagnostico-aula1-mentimeter-gmill
+  layer: audit
+  schema_version: "1"
+  baseline: "2026-10-21"
+  date: "2026-10-21"
+  review_after: "2026-12-31"
+  purpose: |
+    Diagnóstico inicial da turma GMill (Mentimeter da aula 1): dores, expectativas e limites.
+    Mapa das respostas da pesquisa "Diagnóstico AI TECH 05082026", aplicada no início da aula 1 do
+    curso. Fonte: dois prints que o maestro anexou em 2026-10-21 (aba Questions e aba Participants).
+    Sessão ANÔNIMA: os participantes aparecem só como P1..P26, e assim ficam aqui. As evidências (E_*)
+    são transcrição dos prints. As afirmações (C_*) são a minha leitura das respostas livres, uma
+    categoria por resposta: ficam `open` até a turma confirmar (Q_VALIDAR_DORES_COM_A_TURMA).
+  note: |
+    Leia com: bash .claude/validation/kg-radar.sh docs/onion/graph/diagnostico-aula1-mentimeter.kg.yaml
+    E_* = o que a turma respondeu, com contagens. C_* = as dores e expectativas que as respostas
+    sustentam (SUPPORTS). D_* = sugestões de uso no curso (DEPENDS_ON das afirmações). Q_* = o que falta saber.
+
+nodes:
+  # ── Fonte ────────────────────────────────────────────────────────────────────────────────────
+  - id: A_MENTI_DIAGNOSTICO
+    node_type: artifact
+    plane: PROD
+    status: confirmed
+    impact: 3
+    confidence: 1.0
+    verified_at: "2026-10-21"
+    verified_against: prints-mentimeter-anexados-pelo-maestro
+    label: "Mentimeter 'Diagnóstico AI TECH 05082026' da aula 1: 26 participantes, sessão anônima, 6 perguntas, engajamento médio de 46%."
+    narrative: "Dois prints anexados pelo maestro na sessão de 2026-10-21 (aba Questions e aba Participants). Os arquivos de imagem não foram versionados; o que fica no repo é a transcrição dos nós E_*."
+    provenance:
+      source: "prints do Mentimeter anexados pelo maestro na conversa de 2026-10-21"
+      locator: "abas Questions e Participants do resultado 'Diagnóstico AI TECH 05082026'"
+      method: "leitura: das imagens anexadas"
+      locality: pessoa
+
+  # ── Evidências (transcrição) ─────────────────────────────────────────────────────────────────
+  - id: E_Q1_SUCESSO
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 3
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: print-abas-questions-e-participants
+    label: "P1 'O que seria SUCESSO ao final do encontro?': 25/26 responderam, 41 respostas. Topo: aprendizado 7, '48353489' 4, conhecimento 4."
+    narrative: "Contagem completa: aprendizado 7 · 48353489 4 · conhecimento 4 · aprender 2 · eficiência 2 · ferramentas 2 · novidades 2 · 1 cada: agente, agilidade, aprender algo novo, assertividade, comprometimento, eficácia, impactante, informação, melhor usabilidade da IA, melhoria e agilidade, novidade, não desistir, papo legal, tempo, técnicas e ferramentas, usar um gêmeo digital, usar melhor a IA, velocidade."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "pergunta 1 (nuvem de palavras) e coluna 1 da aba Participants"
+      method: "leitura: transcrição e contagem"
+      locality: pessoa
+
+  - id: E_Q2_NAO_ENCONTRAR
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: print-abas-questions-e-participants
+    label: "P2 'O que você espera NÃO encontrar aqui?': 19/26 responderam, 24 respostas. Topo: redundância 6, genérico 4, superficialidade 3."
+    narrative: "Contagem completa: redundância 5 (+ 'redudancias' 1) · genérico 4 · superficialidade 3 · atalhos 2 · substituir a humanidade 2 · 1 cada: contextos básicos, curso de prompt, exemplos genéricos, informações básicas (2 grafias), pendências em andamento, substituir colaborador."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "pergunta 2 (nuvem de palavras) e coluna 2 da aba Participants"
+      method: "leitura: transcrição e contagem"
+      locality: pessoa
+
+  - id: E_Q3_ASSISTENTE_PERFEITO
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 5
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: print-abas-questions-e-participants
+    label: "P3 'Qual seria a primeira tarefa do seu Assistente de IA perfeito?': 20/26 responderam, 21 respostas abertas."
+    narrative: "Respostas: documentação · ler e responder e-mail (2x) · resolver problemas · fazer meu trabalho operacional e me deixar tempo pro estratégico · organizar tarefas e demandas diárias de acordo com prioridade · atender usuários · me apresentar toda a empresa e seus núcleos, processos e negócios · listar e organizar as demandas por prioridade e criticidade usando base de conhecimento · resolver bugs sem gastar meus pontos de energia · organizar as prioridades · terminar o databrick · gerar insights, sugerir melhorias e correções · avaliar as tarefas de maior urgência e agilidade de execução junto com estratégias · otimizar minhas tarefas visando produtividade e ganho de tempo · tutorial completo com vídeo motivacional para capacitar o colaborador na área e para reciclagem · conhecer minha rotina para responder com mais fluidez e assertividade · ajuda com informações sobre as outras áreas · fazer as tarefas repetitivas e eu intervir só onde precisa de avaliação humana · consolidar informações e gerenciar decisões · organizar as tarefas e prioridades."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "pergunta 3 (respostas abertas) e coluna 3 da aba Participants"
+      method: "leitura: transcrição"
+      locality: pessoa
+
+  - id: E_Q4_ONDE_NAO_USAR
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 4
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: print-aba-questions
+    label: "P4 'Onde a IA NÃO deveria ser aplicada?': 6/26 responderam — desconheço, senhas, tokens, gerenciamento (admin), dados sensíveis, dados DP/RH."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "pergunta 4 da aba Questions"
+      method: "leitura: transcrição"
+      locality: pessoa
+
+  - id: E_Q5_HA_VAGAS
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 3
+    confidence: 0.95
+    verified_at: "2026-10-21"
+    verified_against: print-aba-questions
+    label: "P5 'HÁ VAGAS: até 3 anúncios de vagas para agentes': 1/26 respondeu."
+    narrative: "A única resposta: 'conhecimentos interdisciplinares de nível intermediário, com a capacidade de aplicá-los em tarefas para aumentar a produtividade; capaz de automatizar tarefas de baixo e médio nível; responde bem a comando'."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "pergunta 5 da aba Questions"
+      method: "leitura: transcrição"
+      locality: pessoa
+
+  - id: E_Q6_TEMA_DE_CASA
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 3
+    confidence: 1.0
+    verified_at: "2026-10-21"
+    verified_against: print-aba-questions
+    label: "P6 'TEMA DE CASA: Domínios de Conhecimento e Procedimentos': 0/26 respostas."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "pergunta 6 da aba Questions"
+      method: "leitura: transcrição"
+      locality: pessoa
+
+  - id: E_ENGAJAMENTO
+    node_type: evidence
+    plane: PROD
+    status: confirmed
+    impact: 2
+    confidence: 0.9
+    verified_at: "2026-10-21"
+    verified_against: print-aba-participants
+    label: "Engajamento médio de 46%. Resposta por pergunta: 96%, 73%, 77%, 23%, 4% e 0% — a adesão cai quando a pergunta pede texto longo ou trabalho fora da aula."
+    narrative: "Distribuição por participante: 7 em 67%, 11 em 50%, 4 em 33% e 4 em 17%."
+    provenance:
+      source: "A_MENTI_DIAGNOSTICO"
+      locator: "coluna Engagement e rodapé da aba Participants; contadores de cada pergunta na aba Questions"
+      method: "leitura: transcrição e contagem"
+      locality: pessoa
+
+  # ── Afirmações (leitura das respostas, a validar com a turma) ────────────────────────────────
+  - id: C_EXPECTATIVA_APRENDER
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 3
+    confidence: 0.8
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q1_SUCESSO
+    label: "A expectativa dominante é APRENDER: 18 das 41 respostas de sucesso falam de aprendizado, conhecimento, informação ou novidade."
+    narrative: "Em segundo plano: produtividade (eficiência, eficácia, agilidade, velocidade, assertividade, tempo, impactante: 9) e ferramental (ferramentas, técnicas, agente, gêmeo digital, usar melhor a IA: 8). Três respostas falam de atitude (comprometimento, não desistir, papo legal). As 4 ocorrências de '48353489' ficaram fora (Q_NUMERO_48353489)."
+    provenance:
+      source: "E_Q1_SUCESSO"
+      locator: "contagem completa em narrative"
+      method: "derivado: agrupamento manual, uma categoria por termo"
+
+  - id: C_MEDO_CONTEUDO_RASO
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 5
+    confidence: 0.85
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q2_NAO_ENCONTRAR
+    label: "O MAIOR receio é conteúdo raso: 18 das 24 respostas pedem que o curso não seja redundante (6), genérico (5), básico (4) ou superficial (3)."
+    narrative: "Mais 2 rejeitam 'atalhos'. 'Curso de prompt' entrou em básico. A turma quer profundidade aplicada ao contexto dela, não exemplo de vitrine."
+    provenance:
+      source: "E_Q2_NAO_ENCONTRAR"
+      locator: "contagem completa em narrative"
+      method: "derivado: agrupamento manual, uma categoria por termo"
+
+  - id: C_MEDO_SUBSTITUICAO
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 3
+    confidence: 0.8
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q2_NAO_ENCONTRAR
+    label: "Receio minoritário mas explícito de substituição: 3 das 24 respostas não querem ver a IA 'substituir a humanidade' ou 'substituir colaborador'."
+    narrative: "Conversa com a P3, onde a turma pede uma IA que tire o operacional e deixe a avaliação humana com as pessoas."
+    provenance:
+      source: "E_Q2_NAO_ENCONTRAR e E_Q3_ASSISTENTE_PERFEITO"
+      locator: "termos 'substituir a humanidade' e 'substituir colaborador'; respostas sobre avaliação humana"
+      method: "derivado: agrupamento manual"
+
+  - id: C_DOR_PRIORIZACAO_DEMANDAS
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 5
+    confidence: 0.8
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q3_ASSISTENTE_PERFEITO
+    label: "Dor nº 1: PRIORIZAR e ORGANIZAR demandas. 6 das 21 respostas pedem um assistente que ordene tarefas por prioridade, urgência e criticidade."
+    narrative: "Uma delas pede isso 'usando base de conhecimento'. É a candidata natural ao primeiro agente da turma."
+    provenance:
+      source: "E_Q3_ASSISTENTE_PERFEITO"
+      locator: "6 respostas sobre organizar, listar, avaliar e otimizar tarefas e prioridades"
+      method: "derivado: agrupamento manual, uma categoria por resposta"
+
+  - id: C_DOR_CONHECIMENTO_DA_EMPRESA
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 5
+    confidence: 0.75
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q3_ASSISTENTE_PERFEITO
+    label: "Dor nº 2: conhecimento espalhado. 5 das 21 respostas pedem um assistente que apresente a empresa, informe sobre outras áreas e consolide decisões."
+    narrative: "As cinco: apresentar a empresa, núcleos, processos e negócios; informações sobre as outras áreas; consolidar informações e gerenciar decisões; documentação; conhecer a rotina de quem pergunta. É o problema que o business-context e o Company Brain resolvem."
+    provenance:
+      source: "E_Q3_ASSISTENTE_PERFEITO"
+      locator: "5 respostas sobre empresa, áreas, documentação, decisões e rotina"
+      method: "derivado: agrupamento manual, uma categoria por resposta"
+
+  - id: C_DOR_ENGENHARIA_E_DADOS
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.75
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q3_ASSISTENTE_PERFEITO
+    label: "Dor nº 3, do time técnico: 4 das 21 respostas pedem ajuda para resolver problemas e bugs, gerar insights e terminar 'o databrick'."
+    provenance:
+      source: "E_Q3_ASSISTENTE_PERFEITO"
+      locator: "respostas sobre resolver problemas, bugs, insights e databrick"
+      method: "derivado: agrupamento manual, uma categoria por resposta"
+
+  - id: C_DOR_COMUNICACAO_E_ATENDIMENTO
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.8
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q3_ASSISTENTE_PERFEITO
+    label: "Dor nº 4: comunicação e atendimento. 3 das 21 respostas pedem que o assistente leia e responda e-mail (2) e atenda usuários (1)."
+    provenance:
+      source: "E_Q3_ASSISTENTE_PERFEITO"
+      locator: "respostas sobre e-mail e atendimento"
+      method: "derivado: agrupamento manual, uma categoria por resposta"
+
+  - id: C_DOR_TRABALHO_REPETITIVO
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.75
+    verified_at: "2026-10-21"
+    verified_against: agrupamento-sobre-E_Q3_ASSISTENTE_PERFEITO
+    label: "Dor nº 5: trabalho repetitivo. 2 respostas pedem que o assistente faça o operacional e deixe o estratégico e a avaliação humana com a pessoa."
+    narrative: "Mais 1 resposta pede capacitação: tutorial com vídeo para treinar e reciclar colaboradores."
+    provenance:
+      source: "E_Q3_ASSISTENTE_PERFEITO"
+      locator: "respostas sobre operacional, tarefas repetitivas e tutorial"
+      method: "derivado: agrupamento manual, uma categoria por resposta"
+
+  - id: C_LIMITES_DADOS_SENSIVEIS
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 5
+    confidence: 0.8
+    verified_at: "2026-10-21"
+    verified_against: leitura-de-E_Q4_ONDE_NAO_USAR
+    label: "Onde a turma NÃO quer IA: credenciais e dados sensíveis. 5 das 6 respostas citam senhas, tokens, admin, dados sensíveis e DP/RH."
+    narrative: "A sexta resposta diz 'desconheço'. A intuição coincide com a regra de LGPD do hub (dado de paciente/consumidor não é tratado) e com a guarda de segredos. Só 6 de 26 responderam: é um limite apontado, não um consenso medido."
+    provenance:
+      source: "E_Q4_ONDE_NAO_USAR"
+      locator: "as 6 respostas da pergunta 4"
+      method: "leitura: das evidências deste grafo"
+
+  - id: C_ADESAO_TEMA_DE_CASA_BAIXA
+    node_type: claim
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.85
+    verified_at: "2026-10-21"
+    verified_against: E_Q5_HA_VAGAS-E_Q6_TEMA_DE_CASA-e-relato-do-maestro
+    label: "As atividades que pediam produção própria quase não tiveram adesão: 'Há vagas' 1/26 e o tema de casa 0/26."
+    narrative: "Bate com o relato do maestro de que os temas de casa das aulas 1 a 3 não chegaram. Contraste: a turma quer aprender a fundo (C_EXPECTATIVA_APRENDER, C_MEDO_CONTEUDO_RASO), e a profundidade depende do material real que ela mesma traria."
+    provenance:
+      source: "E_Q5_HA_VAGAS, E_Q6_TEMA_DE_CASA e relato do maestro na conversa de 2026-10-21"
+      locator: "contadores das perguntas 5 e 6"
+      method: "leitura: das evidências deste grafo"
+
+  # ── Perguntas abertas ────────────────────────────────────────────────────────────────────────
+  - id: Q_NUMERO_48353489
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 1
+    confidence: 0.5
+    verified_at: "2026-10-21"
+    verified_against: E_Q1_SUCESSO
+    label: "O que é '48353489'? Aparece 4 vezes na P1 (P2, P19 e P24, este duas vezes) e ficou fora das contagens."
+    narrative: "Parece o código de acesso do Mentimeter digitado no campo errado [INFERIDO]."
+    provenance:
+      source: "E_Q1_SUCESSO"
+      locator: "colunas de P2, P19 e P24 na aba Participants"
+      method: "leitura: das evidências deste grafo"
+
+  - id: Q_VALIDAR_DORES_COM_A_TURMA
+    node_type: question
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.6
+    verified_at: "2026-10-21"
+    verified_against: limite-do-metodo-uma-resposta-livre-por-pessoa
+    label: "A ordem das cinco dores vem de uma resposta livre por pessoa, agrupada por mim. Confirmar com a turma antes de escolher o primeiro agente."
+    narrative: "Sugestão de forma: uma votação rápida das cinco dores (priorização, conhecimento da empresa, engenharia e dados, comunicação, repetitivo) numa aula."
+    provenance:
+      source: "C_DOR_* deste grafo"
+      locator: "método de agrupamento declarado no purpose"
+      method: "leitura: das evidências deste grafo"
+
+  # ── Sugestões (dependem das afirmações) ──────────────────────────────────────────────────────
+  - id: D_USO_NO_CURSO
+    node_type: decision
+    plane: PROD
+    status: open
+    impact: 4
+    confidence: 0.65
+    verified_at: "2026-10-21"
+    verified_against: proposta-em-sessao-nao-decidida-pelo-maestro
+    label: "SUGESTÃO (não decidida): usar as dores do diagnóstico como fio das aulas 4 a 6, começando pelo agente de priorização."
+    narrative: "(1) A dor de priorização vira o primeiro agente da turma, ligado ao task manager (aula 4) e forjado na aula 5. (2) O business-context e o Company Brain (aulas 2 e 6) entram como resposta à dor de conhecimento espalhado, com material real da GMill. (3) O medo de conteúdo raso é o melhor argumento para o tema de casa, sem cobrar: a profundidade vem do contexto da própria empresa. (4) Os limites da P4 (senhas, tokens, admin, dados sensíveis, DP/RH) viram guardas explícitas na aula de forja."
+    provenance:
+      source: "C_* deste grafo"
+      locator: "dores 1 e 2, medo de conteúdo raso e limites"
+      method: "derivado: proposta da sessão a partir das afirmações"
+
+edges:
+  - from: E_Q1_SUCESSO
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+  - from: E_Q2_NAO_ENCONTRAR
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+  - from: E_Q4_ONDE_NAO_USAR
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+  - from: E_Q5_HA_VAGAS
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+  - from: E_Q6_TEMA_DE_CASA
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+  - from: E_ENGAJAMENTO
+    to: A_MENTI_DIAGNOSTICO
+    edge_type: TRACES_TO
+
+  - from: E_Q1_SUCESSO
+    to: C_EXPECTATIVA_APRENDER
+    edge_type: SUPPORTS
+  - from: E_Q2_NAO_ENCONTRAR
+    to: C_MEDO_CONTEUDO_RASO
+    edge_type: SUPPORTS
+  - from: E_Q2_NAO_ENCONTRAR
+    to: C_MEDO_SUBSTITUICAO
+    edge_type: SUPPORTS
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: C_MEDO_SUBSTITUICAO
+    edge_type: SUPPORTS
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: C_DOR_PRIORIZACAO_DEMANDAS
+    edge_type: SUPPORTS
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: C_DOR_CONHECIMENTO_DA_EMPRESA
+    edge_type: SUPPORTS
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: C_DOR_ENGENHARIA_E_DADOS
+    edge_type: SUPPORTS
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: C_DOR_COMUNICACAO_E_ATENDIMENTO
+    edge_type: SUPPORTS
+  - from: E_Q3_ASSISTENTE_PERFEITO
+    to: C_DOR_TRABALHO_REPETITIVO
+    edge_type: SUPPORTS
+  - from: E_Q4_ONDE_NAO_USAR
+    to: C_LIMITES_DADOS_SENSIVEIS
+    edge_type: SUPPORTS
+  - from: E_Q5_HA_VAGAS
+    to: C_ADESAO_TEMA_DE_CASA_BAIXA
+    edge_type: SUPPORTS
+  - from: E_Q6_TEMA_DE_CASA
+    to: C_ADESAO_TEMA_DE_CASA_BAIXA
+    edge_type: SUPPORTS
+  - from: E_ENGAJAMENTO
+    to: C_ADESAO_TEMA_DE_CASA_BAIXA
+    edge_type: SUPPORTS
+  - from: E_Q1_SUCESSO
+    to: Q_NUMERO_48353489
+    edge_type: SUPPORTS
+
+  - from: D_USO_NO_CURSO
+    to: C_DOR_PRIORIZACAO_DEMANDAS
+    edge_type: DEPENDS_ON
+  - from: D_USO_NO_CURSO
+    to: C_DOR_CONHECIMENTO_DA_EMPRESA
+    edge_type: DEPENDS_ON
+  - from: D_USO_NO_CURSO
+    to: C_MEDO_CONTEUDO_RASO
+    edge_type: DEPENDS_ON
+  - from: D_USO_NO_CURSO
+    to: C_LIMITES_DADOS_SENSIVEIS
+    edge_type: DEPENDS_ON
+  - from: D_USO_NO_CURSO
+    to: Q_VALIDAR_DORES_COM_A_TURMA
+    edge_type: DEPENDS_ON
